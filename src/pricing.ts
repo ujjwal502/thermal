@@ -16,6 +16,7 @@ const WRITE_5M_MULTIPLIER = 1.25
 const WRITE_1H_MULTIPLIER = 2.0
 
 const RATES: Record<string, Rate> = {
+  'claude-opus-5-5': { input: 4, output: 20, cacheRead: 0.2 },
   'claude-opus-5': { input: 5, output: 25, cacheRead: 0.5 },
   'claude-opus-4-8': { input: 5, output: 25, cacheRead: 0.5 },
   'claude-sonnet-5': { input: 2, output: 10, cacheRead: 0.2 },
