@@ -32,6 +32,11 @@ const SMALLEST_CACHEABLE_TOKENS = 512
 const CHARS_PER_TOKEN = 4
 const MAX_BREAKPOINTS = 4
 
+/** OpenAI caches only prompts of 1024 tokens or more, in 128-token steps, so a
+ *  miss below this is expected rather than a symptom. */
+const OPENAI_SMALLEST_CACHEABLE_TOKENS = 1024
+const MISSES_BEFORE_REPORTING = 3
+
 /** The stable head of a request - tools and system - is the natural cache
  *  prefix. Keying on it finds prompts reused across separate conversations,
  *  which conversation-level grouping cannot see. */
@@ -54,7 +59,8 @@ export class Capture {
   #previous = new Map<string, Seen>()
   #heads = new Map<string, number>()
   #uncachedReported = new Set<string>()
-  #openAiMisses = 0
+  #openAiMissStreak = 0
+  #openAiSawLargePrompt = false
   #requests = 0
   #exchanges: Exchange[] = []
   /** Totals across every provider, so the summary can distinguish "measured and
@@ -154,15 +160,23 @@ export class Capture {
       this.totals.cachedTokens += usage.cachedTokens
     }
 
-    if (provider !== 'openai') return
-    if (usage.promptTokens < SMALLEST_CACHEABLE_TOKENS) return
-    if (usage.cachedTokens > 0) return
-    this.#openAiMisses++
-    if (this.#openAiMisses !== 3) return // Report once, after a clear pattern.
+    if (provider !== 'openai' || usage.promptTokens < OPENAI_SMALLEST_CACHEABLE_TOKENS) return
+
+    // The first large prompt finds an empty cache by design, and a hit proves
+    // the prefix is holding. Only an unbroken run of later misses is evidence;
+    // counting misses across hits flagged healthy traffic on live OpenAI.
+    const first = !this.#openAiSawLargePrompt
+    this.#openAiSawLargePrompt = true
+    if (usage.cachedTokens > 0) {
+      this.#openAiMissStreak = 0
+      return
+    }
+    if (first) return
+    if (++this.#openAiMissStreak !== MISSES_BEFORE_REPORTING) return
 
     this.#record(exchange, {
       id: 'automatic-cache-not-landing',
-      title: `${this.#openAiMisses} large prompts in a row cached nothing`,
+      title: `${MISSES_BEFORE_REPORTING} large prompts in a row cached nothing`,
       detail:
         `Prompts of ${usage.promptTokens} tokens are reporting cached_tokens: 0. ` +
         'OpenAI caches long prefixes automatically, so repeated misses mean the start of the prompt is changing between calls.',

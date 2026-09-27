@@ -211,3 +211,41 @@ test('a path that looks like another host is still forwarded to the configured u
   assert.equal(response.status, 200)
   assert.equal(upstreamHits, before + 1)
 })
+
+// The usage sequence live OpenAI returned for a healthy conversation followed by
+// one whose instructions start with a timestamp (gpt-4.1-nano, 2026-09-27).
+const healthy = [0, 1280, 1280, 1280, 1280]
+const moving = [0, 0, 0, 0, 0]
+
+function replay(cached: number[], capture = new Capture()): Capture {
+  for (const tokens of cached) {
+    const exchange = capture.observe({ model: 'gpt-4.1-nano', messages: [{ role: 'user', content: 'q' }] }, 'openai')
+    capture.observeUsage({ promptTokens: 1465, cachedTokens: tokens }, 'openai', exchange)
+  }
+  return capture
+}
+
+test('a cold first call followed by hits is not reported as automatic caching failing', () => {
+  assert.deepEqual(replay(healthy).findings, [])
+})
+
+test('misses separated by hits are not counted as a run', () => {
+  const capture = replay([...healthy, 0, 0, 1280, 0])
+  assert.deepEqual(capture.findings, [])
+})
+
+test('three misses in a row after the cache had a chance to warm are reported', () => {
+  const capture = replay([...healthy, ...moving])
+  const found = capture.findings.filter((f) => f.id === 'automatic-cache-not-landing')
+  assert.equal(found.length, 1)
+  assert.equal(found[0]?.exchange, 8)
+})
+
+test('prompts under the 1024-token OpenAI minimum never count as misses', () => {
+  const capture = new Capture()
+  for (let i = 0; i < 6; i++) {
+    const exchange = capture.observe({ model: 'gpt-4.1-nano', messages: [{ role: 'user', content: 'q' }] }, 'openai')
+    capture.observeUsage({ promptTokens: 800, cachedTokens: 0 }, 'openai', exchange)
+  }
+  assert.deepEqual(capture.findings, [])
+})
