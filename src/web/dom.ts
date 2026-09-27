@@ -47,6 +47,12 @@ export function usd(amount: number): string {
   return `$${amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 }
 
+/** Same form as the terminal: a live break often costs under a cent, which two
+ *  decimals would round away. The tilde marks it as estimated. */
+export function estimate(amount: number): string {
+  return `~$${amount.toFixed(amount < 1 ? 4 : 2)}`
+}
+
 export function compact(n: number): string {
   if (n >= 1e9) return `${(n / 1e9).toFixed(1)}B`
   if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M`
