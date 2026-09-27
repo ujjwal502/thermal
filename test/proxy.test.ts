@@ -258,3 +258,45 @@ test('a break in the system prompt names where the changing part should go', () 
   const finding = fresh.findings.find((f) => f.id === 'prefix-invalidated')
   assert.match(finding?.fix ?? '', /latest user message, after the last cache breakpoint/)
 })
+
+// A support bot that moved its timestamp out of the system prompt and into the
+// first message. Each turn appends to the history and moves the breakpoint to
+// the newest message, as agents that cache their history do.
+const rules = 'You are a support bot. Follow the refund policy exactly. '.repeat(150)
+
+function turnOf(time: string, questions: string[], cacheHistory: boolean) {
+  const history = questions.flatMap((q, i) => {
+    const last = i === questions.length - 1
+    const user = { role: 'user', content: [{ type: 'text', text: q, ...(last && cacheHistory ? { cache_control: { type: 'ephemeral' } } : {}) }] }
+    return last ? [user] : [user, { role: 'assistant', content: `answer to ${q}` }]
+  })
+  return {
+    model: 'claude-sonnet-5',
+    system: [{ type: 'text', text: rules, cache_control: { type: 'ephemeral' } }],
+    messages: [{ role: 'user', content: `Current time: ${time}` }, ...history],
+  }
+}
+
+test('a timestamp in the first message is caught when the history behind it is cached', () => {
+  const capture = new Capture()
+  capture.observe(turnOf('18:00:51', ['Where is my refund?'], true))
+  capture.observe(turnOf('18:00:53', ['Where is my refund?', 'It has been a week'], true))
+  const finding = capture.findings.find((f) => f.id === 'prefix-invalidated')
+  assert.ok(finding, 'expected the changed first message to be reported')
+  assert.match(finding.title, /messages/)
+})
+
+test('a timestamp in the first message costs nothing when only the system prompt is cached', () => {
+  const capture = new Capture()
+  capture.observe(turnOf('18:00:51', ['Where is my refund?'], false))
+  capture.observe(turnOf('18:00:53', ['Where is my refund?', 'It has been a week'], false))
+  assert.deepEqual(capture.findings.filter((f) => f.id === 'prefix-invalidated'), [])
+})
+
+test('separate conversations sharing a system prompt are not mistaken for a break', () => {
+  const capture = new Capture()
+  capture.observe(turnOf('09:00:00', ['Where is my refund?', 'It has been a week'], true))
+  capture.observe(turnOf('09:05:00', ['How do I change my address?', 'The new one is in Leeds'], true))
+  capture.observe(turnOf('09:06:00', ['Can I cancel my order?'], true))
+  assert.deepEqual(capture.findings.filter((f) => f.id === 'prefix-invalidated'), [])
+})

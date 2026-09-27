@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import type { Divergence, Provider, RenderedPrefix, RequestBody, SegmentName } from './prefix.ts'
-import { conversationKey, firstDivergence, render, toolSerialisationChanged } from './prefix.ts'
+import { continues, conversationKey, firstDivergence, render, toolSerialisationChanged } from './prefix.ts'
 import { readSavings } from '../pricing.ts'
 import type { ObservedUsage } from './usage.ts'
 import type { Exchange, Live } from '../dashboard/contract.ts'
@@ -36,6 +36,10 @@ const DIVERGENCE_FIX: Record<SegmentName, string> = {
  *  polls the whole list, so it must stay small. */
 const KEPT_EXCHANGES = 200
 
+/** How far back to look for the conversation a request continues when its
+ *  first message is new. Agents interleave a handful of conversations at most. */
+const RECENT_CANDIDATES = 20
+
 /** Anthropic will not cache a prefix shorter than this; the exact floor is
  *  model-dependent (512-4096 tokens) so we use the smallest, and only warn when
  *  a request is below it AND has asked for caching. Characters stand in for
@@ -69,6 +73,7 @@ function headLength(prefix: RenderedPrefix): number {
 export class Capture {
   readonly findings: LiveFinding[] = []
   #previous = new Map<string, Seen>()
+  #recent: Seen[] = []
   #heads = new Map<string, number>()
   #uncachedReported = new Set<string>()
   #openAiMissStreak = 0
@@ -104,8 +109,11 @@ export class Capture {
     if (this.#exchanges.length > KEPT_EXCHANGES) this.#exchanges.shift()
 
     const key = conversationKey(body)
-    const previous = this.#previous.get(key)
-    this.#previous.set(key, { body, prefix })
+    const previous = this.#previous.get(key) ?? this.#recent.findLast((seen) => continues(seen.body, body))
+    const seen = { body, prefix }
+    this.#previous.set(key, seen)
+    this.#recent.push(seen)
+    if (this.#recent.length > RECENT_CANDIDATES) this.#recent.shift()
 
     if (provider === 'anthropic' && prefix.breakpoints > MAX_BREAKPOINTS) {
       this.#record(exchange, {

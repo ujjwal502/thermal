@@ -185,6 +185,39 @@ export function firstDivergence(previous: RenderedPrefix, current: RenderedPrefi
 /** Requests belong to the same conversation when they open with the same first
  *  message. It is a heuristic, but a first message is stable for a conversation
  *  and cheap to key on. */
+function messagesOf(body: RequestBody): unknown[] {
+  const conversation = body.messages ?? body.input
+  return Array.isArray(conversation) ? conversation : []
+}
+
+/** Serialisation with cache_control removed. Agents move the breakpoint to the
+ *  newest message every turn, so a message that carried it last time and not
+ *  now is still the same message. */
+function unmarked(value: unknown): string {
+  if (value === null || typeof value !== 'object') return canonical(value)
+  if (Array.isArray(value)) return `[${value.map(unmarked).join(',')}]`
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([key]) => key !== 'cache_control')
+    .sort(([a], [b]) => (a < b ? -1 : 1))
+  return `{${entries.map(([key, inner]) => `${JSON.stringify(key)}:${unmarked(inner)}`).join(',')}}`
+}
+
+/** Whether current carries on the conversation previous belonged to, judged by
+ *  its history rather than its first message: at least half of previous's
+ *  messages reappear at the same positions. conversationKey alone is blind when
+ *  the first message changes every call - a timestamp moved there out of the
+ *  system prompt - and a history cached behind it breaks unseen. */
+export function continues(previous: RequestBody, current: RequestBody): boolean {
+  const before = messagesOf(previous)
+  const after = messagesOf(current)
+  if (before.length < 2 || after.length < before.length) return false
+  let same = 0
+  for (let i = 0; i < before.length; i++) {
+    if (unmarked(before[i]) === unmarked(after[i])) same++
+  }
+  return same * 2 >= before.length
+}
+
 export function conversationKey(body: RequestBody): string {
   const conversation = body.messages ?? body.input
   const first = Array.isArray(conversation) ? conversation[0] : conversation
