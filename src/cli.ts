@@ -4,6 +4,7 @@ import { parseArgs } from 'node:util'
 import { detectors } from './detectors/index.ts'
 import { defaultRoot, discover } from './sessions/discover.ts'
 import { parseSession } from './sessions/parse.ts'
+import { redact, tildify } from './sessions/redact.ts'
 import { print, printDashboard, printError } from './report/terminal.ts'
 import { printFinding, printListening, printSummary } from './report/live.ts'
 import { startDashboard } from './dashboard/server.ts'
@@ -28,6 +29,7 @@ const HELP = `
     --upstream <url>   proxy target (default: https://api.anthropic.com)
     --since <days>     only sessions with activity in the last N days
     --project <name>   limit to one project
+    --redact           replace project names and paths, for screenshots you can share
     --help
 
   Reads Claude Code session logs. Nothing leaves your machine.
@@ -155,6 +157,7 @@ async function main(): Promise<number> {
       port: { type: 'string' },
       upstream: { type: 'string' },
       report: { type: 'boolean' },
+      redact: { type: 'boolean' },
       help: { type: 'boolean', short: 'h' },
     },
     allowPositionals: true,
@@ -202,6 +205,7 @@ async function main(): Promise<number> {
     return 1
   }
 
+  if (values.redact) turns = redact(turns)
   const findings = detectors.flatMap((detector) => detector.run(turns))
 
   const elapsedMs = Date.now() - started
@@ -216,7 +220,8 @@ async function main(): Promise<number> {
 
   // Piped output is being captured by a script, which has no use for a server.
   if (values.report || !process.stdout.isTTY) return 0
-  return serveDashboard({ root, turns, elapsedMs, skippedLines }, values.port)
+  const source = values.redact ? 'project names and paths redacted' : tildify(root)
+  return serveDashboard({ source, turns, elapsedMs, skippedLines }, values.port)
 }
 
 try {

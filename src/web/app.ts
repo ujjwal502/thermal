@@ -151,7 +151,7 @@ async function renderRead(): Promise<void> {
     if (token !== renders) return
     overview = fetched
     overviewKey = key
-    context.textContent = fetched.root
+    context.textContent = fetched.source
   }
   drawChrome(view === 'session' ? 'sessions' : view, params, overview.projects)
 

@@ -5,7 +5,8 @@ import type { Finding, Turn } from '../types.ts'
 import type { FindingRow, HitRate, Overview, SessionDetail, SessionRow } from './contract.ts'
 
 export interface Analysis {
-  root: string
+  /** What the header says the data came from: a path, or a note that it is redacted. */
+  source: string
   turns: Turn[]
   elapsedMs: number
   skippedLines: number
@@ -138,7 +139,7 @@ export function overview(analysis: Analysis, filter: Filter, now = Date.now()): 
 
   return {
     mode: 'read',
-    root: analysis.root,
+    source: analysis.source,
     filter,
     projects: [...new Set(analysis.turns.map((turn) => turn.project))].sort(),
     totals: {

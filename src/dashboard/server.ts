@@ -49,7 +49,7 @@ async function handle(request: IncomingMessage, response: ServerResponse, analys
   if (path.startsWith('/api/session/')) {
     const id = decodeURIComponent(path.slice('/api/session/'.length))
     const detail = sessionDetail(analysis, id)
-    if (!detail) return sendJSON(response, 404, { error: `No session ${id} in ${analysis.root}.` })
+    if (!detail) return sendJSON(response, 404, { error: `No session ${id} in ${analysis.source}.` })
     return sendJSON(response, 200, detail)
   }
 

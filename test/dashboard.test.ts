@@ -4,6 +4,7 @@ import { test } from 'node:test'
 import { detectors } from '../src/detectors/index.ts'
 import { overview, sessionDetail, type Analysis } from '../src/dashboard/model.ts'
 import { startDashboard } from '../src/dashboard/server.ts'
+import { redact } from '../src/sessions/redact.ts'
 import type { Turn } from '../src/types.ts'
 
 const BASE = new Date('2026-09-01T12:00:00').getTime()
@@ -35,7 +36,7 @@ const turns: Turn[] = [
   turn('b', (2 * DAY) / 1000 + 30, { project: 'web', cacheReadTokens: 20_000 }),
   turn('b', (2 * DAY) / 1000 + 60, { project: 'web', cacheReadTokens: 20_000 }),
 ]
-const analysis: Analysis = { root: '/fixtures', turns, elapsedMs: 1, skippedLines: 0 }
+const analysis: Analysis = { source: '/fixtures', turns, elapsedMs: 1, skippedLines: 0 }
 const now = BASE + 3 * DAY
 const all = { since: null, project: null }
 
@@ -146,4 +147,16 @@ test('the dashboard serves no file outside its own assets', async () => {
       assert.equal((await fetch(`${origin}${path}`)).status, 404, path)
     }
   })
+})
+
+test('redaction replaces every project name but leaves every number alone', () => {
+  const named = [...turns, turn('c', 60, { project: 'Desktop/acme-client' })]
+  const plain = overview({ ...analysis, turns: named }, all, now)
+  const hidden = overview({ ...analysis, turns: redact(named) }, all, now)
+  const json = JSON.stringify(hidden)
+
+  for (const name of ['api', 'web', 'acme']) assert.ok(!json.includes(name), `${name} leaked`)
+  assert.deepEqual(hidden.projects, ['project 1', 'project 2', 'project 3'])
+  assert.deepEqual(hidden.totals, plain.totals)
+  assert.deepEqual(hidden.findings, plain.findings)
 })

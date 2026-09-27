@@ -50,7 +50,7 @@ export interface SessionRow {
 
 export interface Overview {
   mode: 'read'
-  root: string
+  source: string
   filter: { since: number | null; project: string | null }
   projects: string[]
   totals: {
