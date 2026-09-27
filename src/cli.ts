@@ -1,10 +1,13 @@
 #!/usr/bin/env node
+import { spawn } from 'node:child_process'
 import { parseArgs } from 'node:util'
 import { detectors } from './detectors/index.ts'
 import { defaultRoot, discover } from './sessions/discover.ts'
 import { parseSession } from './sessions/parse.ts'
-import { print, printError } from './report/terminal.ts'
+import { print, printDashboard, printError } from './report/terminal.ts'
 import { printFinding, printListening, printSummary } from './report/live.ts'
+import { startDashboard } from './dashboard/server.ts'
+import type { Analysis } from './dashboard/model.ts'
 import { Capture } from './proxy/capture.ts'
 import { startProxy } from './proxy/server.ts'
 import type { Turn } from './types.ts'
@@ -15,12 +18,13 @@ const HELP = `
   usage: thermal [options]
 
   commands:
-    (none)             analyse session logs already on disk
+    (none)             analyse session logs already on disk, then open the dashboard
     proxy              watch live traffic and diff the prefix in real time
 
   options:
+    --report           print the terminal report only, no dashboard
     --root <path>      session directory (default: ~/.claude/projects)
-    --port <n>         proxy port (default: 7878)
+    --port <n>         dashboard port (default: 7870) or proxy port (default: 7878)
     --upstream <url>   proxy target (default: https://api.anthropic.com)
     --since <days>     only sessions with activity in the last N days
     --project <name>   limit to one project
@@ -50,13 +54,55 @@ async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promis
 
 /** 7878 is quiet on most machines; 8080 and 8787 collide constantly. */
 const DEFAULT_PORT = 7878
+const DEFAULT_DASHBOARD_PORT = 7870
+
+function parsePort(text: string | undefined, fallback: number): number | undefined {
+  const port = text === undefined ? fallback : Number(text)
+  if (Number.isInteger(port) && port >= 1 && port <= 65535) return port
+  printError(`--port expects a number between 1 and 65535, got "${text}".`)
+  return undefined
+}
+
+function openBrowser(url: string): void {
+  const [command, args] =
+    process.platform === 'darwin'
+      ? ['open', [url]]
+      : process.platform === 'win32'
+        ? ['cmd', ['/c', 'start', '', url]]
+        : ['xdg-open', [url]]
+  spawn(command, args, { stdio: 'ignore', detached: true })
+    .on('error', () => printError(`Could not open a browser. Visit ${url} yourself.`))
+    .unref()
+}
+
+function serveDashboard(analysis: Analysis, portText: string | undefined): Promise<number> {
+  const port = parsePort(portText, DEFAULT_DASHBOARD_PORT)
+  if (port === undefined) return Promise.resolve(1)
+
+  return new Promise<number>((resolve) => {
+    const dashboard = startDashboard({
+      analysis,
+      port,
+      portIsExplicit: portText !== undefined,
+      onListen: (url) => {
+        printDashboard(url)
+        openBrowser(url)
+      },
+      onError: (message) => printError(message),
+      onFatal: () => resolve(1),
+    })
+    process.on('SIGINT', () => {
+      void dashboard
+        .close()
+        .catch(() => undefined)
+        .then(() => resolve(0))
+    })
+  })
+}
 
 function runProxy(portText: string | undefined, upstreamText: string | undefined): Promise<number> {
-  const port = portText === undefined ? DEFAULT_PORT : Number(portText)
-  if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    printError(`--port expects a number between 1 and 65535, got "${portText}".`)
-    return Promise.resolve(1)
-  }
+  const port = parsePort(portText, DEFAULT_PORT)
+  if (port === undefined) return Promise.resolve(1)
 
   const upstream = upstreamText ?? 'https://api.anthropic.com'
   if (!URL.canParse(upstream)) {
@@ -108,6 +154,7 @@ async function main(): Promise<number> {
       project: { type: 'string' },
       port: { type: 'string' },
       upstream: { type: 'string' },
+      report: { type: 'boolean' },
       help: { type: 'boolean', short: 'h' },
     },
     allowPositionals: true,
@@ -157,15 +204,19 @@ async function main(): Promise<number> {
 
   const findings = detectors.flatMap((detector) => detector.run(turns))
 
+  const elapsedMs = Date.now() - started
   print({
     turns,
     findings,
     sessionCount: new Set(turns.map((turn) => turn.sessionId)).size,
     projectCount: new Set(turns.map((turn) => turn.project)).size,
     skippedLines,
-    elapsedMs: Date.now() - started,
+    elapsedMs,
   })
-  return 0
+
+  // Piped output is being captured by a script, which has no use for a server.
+  if (values.report || !process.stdout.isTTY) return 0
+  return serveDashboard({ root, turns, elapsedMs, skippedLines }, values.port)
 }
 
 try {

@@ -3,6 +3,7 @@ import type { Divergence, Provider, RenderedPrefix, RequestBody } from './prefix
 import { conversationKey, firstDivergence, render, toolSerialisationChanged } from './prefix.ts'
 import { readSavings } from '../pricing.ts'
 import type { ObservedUsage } from './usage.ts'
+import type { Exchange, Live } from '../dashboard/contract.ts'
 
 export interface LiveFinding {
   id: string
@@ -10,12 +11,18 @@ export interface LiveFinding {
   detail: string
   fix: string
   at: Date
+  /** The exchange that triggered it, so the live view can show its prefix. */
+  exchange: number
 }
 
 interface Seen {
   body: RequestBody
   prefix: RenderedPrefix
 }
+
+/** Enough history to scroll back through a working session; the live view
+ *  polls the whole list, so it must stay small. */
+const KEPT_EXCHANGES = 200
 
 /** Anthropic will not cache a prefix shorter than this; the exact floor is
  *  model-dependent (512-4096 tokens) so we use the smallest, and only warn when
@@ -49,6 +56,7 @@ export class Capture {
   #uncachedReported = new Set<string>()
   #openAiMisses = 0
   #requests = 0
+  #exchanges: Exchange[] = []
   /** Totals across every provider, so the summary can distinguish "measured and
    *  healthy" from "measured nothing" - silence meant both until this existed. */
   readonly totals = { withUsage: 0, promptTokens: 0, cachedTokens: 0 }
@@ -59,15 +67,30 @@ export class Capture {
 
   /** Runs after the response has already been sent. Nothing here may block a
    *  request; the proxy's whole value depends on being invisible. */
-  observe(body: RequestBody, provider: Provider = 'anthropic'): void {
+  observe(body: RequestBody, provider: Provider = 'anthropic'): Exchange {
     this.#requests++
     const prefix = render(body, provider)
+    const exchange: Exchange = {
+      n: this.#requests,
+      at: new Date().toISOString(),
+      provider,
+      model: typeof body.model === 'string' ? body.model : 'unknown',
+      segments: prefix.segments.map((segment) => ({ name: segment.name, chars: segment.text.length })),
+      cacheEndsAt: prefix.cacheEndsAt ?? null,
+      promptTokens: null,
+      cachedTokens: null,
+      divergence: null,
+      findings: [],
+    }
+    this.#exchanges.push(exchange)
+    if (this.#exchanges.length > KEPT_EXCHANGES) this.#exchanges.shift()
+
     const key = conversationKey(body)
     const previous = this.#previous.get(key)
     this.#previous.set(key, { body, prefix })
 
     if (provider === 'anthropic' && prefix.breakpoints > MAX_BREAKPOINTS) {
-      this.#record({
+      this.#record(exchange, {
         id: 'too-many-breakpoints',
         title: `${prefix.breakpoints} cache breakpoints, limit is ${MAX_BREAKPOINTS}`,
         detail: 'Breakpoints past the fourth are rejected, so some of this request is not being cached at all.',
@@ -76,7 +99,7 @@ export class Capture {
     }
 
     if (provider === 'anthropic' && prefix.breakpoints > 0 && prefix.text.length < SMALLEST_CACHEABLE_TOKENS * CHARS_PER_TOKEN) {
-      this.#record({
+      this.#record(exchange, {
         id: 'prefix-below-minimum',
         title: 'Prefix is too short to be cached',
         detail: `The prefix is roughly ${Math.round(prefix.text.length / CHARS_PER_TOKEN)} tokens, under the ${SMALLEST_CACHEABLE_TOKENS} minimum. Caching silently does nothing here and no error is raised.`,
@@ -84,12 +107,12 @@ export class Capture {
       })
     }
 
-    if (provider === 'anthropic') this.#checkUncachedRepeat(body, prefix)
+    if (provider === 'anthropic') this.#checkUncachedRepeat(body, prefix, exchange)
 
-    if (!previous) return
+    if (!previous) return exchange
 
     if (toolSerialisationChanged(previous.body, body)) {
-      this.#record({
+      this.#record(exchange, {
         id: 'nondeterministic-tool-json',
         title: 'Identical tools serialised into different bytes',
         detail: 'The tool definitions mean the same thing but their JSON key order changed between requests. Tools render first, so this invalidates the entire prefix.',
@@ -99,7 +122,7 @@ export class Capture {
 
     const previousNames = previous.prefix.toolNames.join(',')
     if (previousNames !== prefix.toolNames.join(',')) {
-      this.#record({
+      this.#record(exchange, {
         id: 'tool-set-changed',
         title: 'Tool list changed mid-conversation',
         detail: `Tools went from [${previousNames}] to [${prefix.toolNames.join(',')}]. Tools render before everything else, so the whole prefix is recomputed.`,
@@ -111,14 +134,20 @@ export class Capture {
     // anything inferred from diffing text. Only Anthropic needs the diff.
     if (provider === 'anthropic') {
       const divergence = firstDivergence(previous.prefix, prefix)
-      if (divergence) this.#recordDivergence(divergence)
+      if (divergence) {
+        exchange.divergence = divergence
+        this.#recordDivergence(divergence, exchange)
+      }
     }
+    return exchange
   }
 
   /** OpenAI caches automatically, so there is no breakpoint to get wrong - the
    *  only failure mode is a prefix that never repeats identically. When a large
    *  prompt keeps missing the cache, the prefix is moving. */
-  observeUsage(usage: ObservedUsage, provider: Provider): void {
+  observeUsage(usage: ObservedUsage, provider: Provider, exchange: Exchange): void {
+    exchange.promptTokens = usage.promptTokens
+    exchange.cachedTokens = usage.cachedTokens
     if (usage.promptTokens > 0) {
       this.totals.withUsage++
       this.totals.promptTokens += usage.promptTokens
@@ -131,7 +160,7 @@ export class Capture {
     this.#openAiMisses++
     if (this.#openAiMisses !== 3) return // Report once, after a clear pattern.
 
-    this.#record({
+    this.#record(exchange, {
       id: 'automatic-cache-not-landing',
       title: `${this.#openAiMisses} large prompts in a row cached nothing`,
       detail:
@@ -144,7 +173,7 @@ export class Capture {
   /** A large stable prompt resent with no breakpoint at all. This is not a
    *  broken cache - it is a cache nobody asked for, and it is invisible because
    *  nothing fails. Reported once per distinct prompt, on the second sighting. */
-  #checkUncachedRepeat(body: RequestBody, prefix: RenderedPrefix): void {
+  #checkUncachedRepeat(body: RequestBody, prefix: RenderedPrefix, exchange: Exchange): void {
     if (prefix.breakpoints > 0) return
 
     const key = headKey(prefix)
@@ -159,7 +188,7 @@ export class Capture {
     const model = typeof body.model === 'string' ? body.model : 'claude-opus-5'
     const perRepeat = readSavings(tokens, model)
 
-    this.#record({
+    this.#record(exchange, {
       id: 'cacheable-prefix-uncached',
       title: `A ~${tokens} token prompt is being resent uncached`,
       detail:
@@ -170,8 +199,8 @@ export class Capture {
     })
   }
 
-  #recordDivergence(divergence: Divergence): void {
-    this.#record({
+  #recordDivergence(divergence: Divergence, exchange: Exchange): void {
+    this.#record(exchange, {
       id: 'prefix-invalidated',
       title: `Prefix broke in ${divergence.segment}, ${divergence.offsetInSegment} bytes in`,
       detail:
@@ -185,7 +214,19 @@ export class Capture {
     })
   }
 
-  #record(finding: Omit<LiveFinding, 'at'>): void {
-    this.findings.push({ ...finding, at: new Date() })
+  #record(exchange: Exchange, finding: Omit<LiveFinding, 'at' | 'exchange'>): void {
+    exchange.findings.push(finding.id)
+    this.findings.push({ ...finding, at: new Date(), exchange: exchange.n })
+  }
+
+  snapshot(upstream: string): Live {
+    return {
+      mode: 'proxy',
+      upstream,
+      requests: this.#requests,
+      usage: { ...this.totals },
+      exchanges: this.#exchanges,
+      findings: this.findings.map((finding) => ({ ...finding, at: finding.at.toISOString() })),
+    }
   }
 }

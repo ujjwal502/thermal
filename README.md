@@ -12,7 +12,7 @@ Thermal runs locally. It sends nothing anywhere: no telemetry, no account, no
 upload.
 
 ```
-npx thermal-cache            # analyse Claude Code logs on this machine
+npx thermal-cache            # analyse Claude Code logs, then open the dashboard
 npx thermal-cache proxy      # watch live API traffic from your own agent
 ```
 
@@ -43,6 +43,13 @@ export OPENAI_BASE_URL=http://127.0.0.1:7878/v1
 The official SDKs for both providers read these variables, so most agents need
 no code change. Run the agent as usual; findings print as they happen, and
 Ctrl-C prints a summary.
+
+The live view at `http://127.0.0.1:7878/_thermal/` shows the same traffic in a
+browser: each request as a cell coloured by how much of its prompt was served
+from cache, and, for any request you select, the prompt drawn as one bar in
+render order (tools, system, messages) split into cached and recomputed bytes,
+with the diff at the point it broke. Requests under `/_thermal` are answered by
+the proxy and never forwarded.
 
 A finding names the segment and offset where the prefix diverged, with the bytes
 on either side:
@@ -79,6 +86,12 @@ FINDINGS  ranked by cost
   ttl-premium-wasted · critical · 29410 occurrences · 182.4M tokens
 ```
 
+After the terminal report, Thermal serves a dashboard on `127.0.0.1:7870` and
+opens it: waste and spend by day, findings with their fixes, projects, and every
+session as a turn-by-turn ribbon that marks where the cache went cold. Filters
+for time range and project scope every view, and every view has a URL. Pass
+`--report`, or pipe the output, for the terminal report alone.
+
 Logs record token counts, not request bodies, so read mode can say when a cache
 went cold but not which byte caused it. That needs proxy mode.
 
@@ -90,10 +103,11 @@ numbers before pointing the proxy at your own agent.
 Options:
 
 ```
+--report           terminal report only, no dashboard
 --root <path>      session directory (default: ~/.claude/projects)
 --since <days>     only requests from the last N days
 --project <name>   only projects whose name contains this
---port <n>         proxy port (default: 7878)
+--port <n>         dashboard port (default: 7870) or proxy port (default: 7878)
 --upstream <url>   proxy target (default: https://api.anthropic.com)
 ```
 
@@ -136,11 +150,17 @@ truth instead of diffing.
 
 ```
 npm install
-npm run build          # typecheck, then compile to dist/
+npm run build          # typecheck, then compile the CLI and the browser code to dist/
 npm test
 scripts/slop-check.sh
 node src/cli.ts        # run from source (Node 22.6+ strips types natively)
 ```
+
+The dashboard has no framework and no runtime dependencies: hand-written DOM
+and SVG in `src/web/`, compiled by the same TypeScript, with markup, styles and
+the font in `web/`. The font is Iosevka (SIL OFL 1.1, `web/fonts/OFL.txt`),
+subset to the glyphs the UI uses, 15 kB per weight. Build before running from
+source, because the browser code is served from `dist/web/`.
 
 `CLAUDE.md` holds the engineering standards and `SPEC.md` the design and roadmap.
 

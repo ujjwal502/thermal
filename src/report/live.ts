@@ -10,6 +10,8 @@ export function printListening(url: string, upstream: string): void {
   ${bold('thermal proxy')} ${muted('listening on')} ${bold(url)}
   ${muted('forwarding to')} ${secondary(upstream)}
 
+  ${muted('live view')}     ${bold(`${url}/_thermal/`)}
+
   ${secondary('Point your agent at it and keep working:')}
     ${muted('export')} ${exportLine}
 

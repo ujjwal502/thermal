@@ -1,5 +1,5 @@
 import { strict as assert } from 'node:assert'
-import { createServer, type Server } from 'node:http'
+import { createServer, get, type Server } from 'node:http'
 import { after, before, test } from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
 import { Capture } from '../src/proxy/capture.ts'
@@ -70,6 +70,16 @@ after(async () => {
   await proxy.close()
   upstream.close()
 })
+
+/** fetch ignores a Host header it is given, so a forged Host needs node:http. */
+function statusWithHost(url: string, host: string): Promise<number> {
+  return new Promise((resolve, reject) => {
+    get(url, { headers: { host } }, (response) => {
+      response.resume()
+      resolve(response.statusCode ?? 0)
+    }).on('error', reject)
+  })
+}
 
 async function send(body: unknown): Promise<Response> {
   return fetch(`${proxyUrl}/v1/messages`, {
@@ -163,6 +173,32 @@ test('a short prompt is not worth caching and is not flagged', () => {
   fresh.observe(request('short'))
   fresh.observe(request('short', { messages: [{ role: 'user', content: 'other' }] }))
   assert.equal(fresh.findings.find((f) => f.id === 'cacheable-prefix-uncached'), undefined)
+})
+
+test('the live view is answered by the proxy and never forwarded upstream', async () => {
+  const before = upstreamHits
+  const page = await fetch(`${proxyUrl}/_thermal/`)
+  const live = await fetch(`${proxyUrl}/_thermal/api/live`)
+  assert.equal(page.status, 200)
+  assert.match(await page.text(), /<title>thermal<\/title>/)
+  assert.equal(((await live.json()) as { mode: string }).mode, 'proxy')
+  assert.equal(upstreamHits, before)
+})
+
+test('the live view refuses requests not addressed to localhost', async () => {
+  assert.equal(await statusWithHost(`${proxyUrl}/_thermal/api/live`, 'attacker.example'), 403)
+})
+
+test('a prefix break is kept with its exchange so the live view can show where it happened', () => {
+  const fresh = new Capture()
+  const cached = (text: string) => ({ ...request(''), system: [{ type: 'text', text, cache_control: { type: 'ephemeral' } }] })
+  fresh.observe(cached('You are helpful.'))
+  const broken = fresh.observe(cached('You are helpful. 12:04:31'))
+
+  const snapshot = fresh.snapshot('https://api.anthropic.com')
+  const finding = snapshot.findings.find((f) => f.id === 'prefix-invalidated')
+  assert.equal(finding?.exchange, broken.n)
+  assert.equal(snapshot.exchanges.find((e) => e.n === broken.n)?.divergence?.segment, 'system')
 })
 
 test('a path that looks like another host is still forwarded to the configured upstream', async () => {

@@ -83,6 +83,10 @@ export function print(input: ReportInput): void {
   console.log(render(input))
 }
 
+export function printDashboard(url: string): void {
+  console.log(`  ${bold('dashboard')}  ${url}   ${muted('Ctrl-C to stop')}\n`)
+}
+
 export function printError(message: string): void {
   console.error(`\n  ${critical('thermal')} ${message}\n`)
 }

@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>thermal</title>
+    <!-- Without this the browser asks for /favicon.ico, which the proxy would
+         forward upstream to the provider. -->
+    <link rel="icon" href="data:," />
+    <link rel="preload" href="./fonts/iosevka-400.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="./fonts/iosevka-600.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="stylesheet" href="./style.css" />
+    <script type="module" src="./app.js"></script>
+  </head>
+  <body>
+    <header class="bar">
+      <span class="wordmark">thermal</span>
+      <span class="context" id="context"></span>
+      <nav id="nav"></nav>
+    </header>
+    <div id="filters"></div>
+    <main id="main"></main>
+    <footer>
+      <span>Runs locally. Nothing leaves this machine.</span>
+      <span>? keyboard</span>
+    </footer>
+    <dialog id="help">
+      <div class="label">Keyboard</div>
+      <dl>
+        <dt>j / k</dt>
+        <dd>next / previous row</dd>
+        <dt>enter</dt>
+        <dd>open the selected row</dd>
+        <dt>/</dt>
+        <dd>search sessions</dd>
+        <dt>1 - 4</dt>
+        <dd>switch view</dd>
+        <dt>esc</dt>
+        <dd>back, or close this</dd>
+      </dl>
+    </dialog>
+  </body>
+</html>

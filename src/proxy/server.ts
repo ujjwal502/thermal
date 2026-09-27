@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import type { Capture } from './capture.ts'
 import type { Provider, RequestBody } from './prefix.ts'
 import { extractUsage } from './usage.ts'
+import { fromLoopback, sendJSON, serveStatic } from '../dashboard/static.ts'
 
 export interface ProxyOptions {
   port: number
@@ -53,11 +54,33 @@ function parseBody(raw: Buffer): RequestBody | undefined {
   }
 }
 
+/** The live view is served from the proxy's own port under a path no provider
+ *  API uses, so pointing a browser at the proxy needs no second port. */
+const LIVE = '/_thermal'
+
+async function serveLive(request: IncomingMessage, response: ServerResponse, options: ProxyOptions, path: string): Promise<void> {
+  if (!fromLoopback(request)) {
+    response.writeHead(403, { 'content-type': 'text/plain' }).end('Thermal only answers requests addressed to localhost.')
+    return
+  }
+  if (path === LIVE) {
+    response.writeHead(301, { location: `${LIVE}/` }).end()
+    return
+  }
+  const name = path.slice(LIVE.length + 1)
+  if (name === 'api/mode') return sendJSON(response, 200, { mode: 'proxy' })
+  if (name === 'api/live') return sendJSON(response, 200, options.capture.snapshot(options.upstream))
+  await serveStatic(name, response)
+}
+
 async function handle(
   request: IncomingMessage,
   response: ServerResponse,
   options: ProxyOptions,
 ): Promise<void> {
+  const pathname = new URL(`http://localhost${request.url ?? '/'}`).pathname
+  if (pathname === LIVE || pathname.startsWith(`${LIVE}/`)) return serveLive(request, response, options, pathname)
+
   const raw = await readBody(request)
   // Resolving the path against the upstream would let //other.host/... replace
   // the host, sending the caller's API key somewhere they never configured.
@@ -98,9 +121,9 @@ async function handle(
   // Off the hot path: the response is already delivered.
   setImmediate(() => {
     try {
-      options.capture.observe(body, provider)
+      const exchange = options.capture.observe(body, provider)
       const usage = extractUsage(Buffer.concat(seen).toString('utf8'), provider)
-      if (usage) options.capture.observeUsage(usage, provider)
+      if (usage) options.capture.observeUsage(usage, provider, exchange)
     } catch (error) {
       options.onError(`analysis failed: ${error instanceof Error ? error.message : String(error)}`)
     }

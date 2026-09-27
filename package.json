@@ -6,9 +6,9 @@
   "author": "Ujjwal",
   "type": "module",
   "bin": { "thermal": "dist/cli.js" },
-  "files": ["dist"],
+  "files": ["dist", "web"],
   "scripts": {
-    "build": "tsc --noEmit && tsc -p tsconfig.build.json",
+    "build": "tsc --noEmit && tsc -p tsconfig.build.json && tsc -p tsconfig.web.json",
     "test": "node --test \"test/**/*.test.ts\"",
     "start": "node src/cli.ts",
     "prepack": "npm run build"

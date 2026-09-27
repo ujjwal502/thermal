@@ -14,5 +14,6 @@
     "lib": ["es2023"],
     "types": ["node"]
   },
-  "include": ["src/**/*.ts", "test/**/*.ts"]
+  "include": ["src/**/*.ts", "test/**/*.ts"],
+  "exclude": ["src/web"]
 }
