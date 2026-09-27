@@ -102,7 +102,8 @@ Each one is a liability in a tool people run with `npx` — it is download weigh
 
 - Commit messages: imperative subject under 60 chars, body explaining *why* when it isn't obvious. No "feat: implement comprehensive solution for parsing".
 - Small commits. A commit that touches the parser, the UI, and the pricing table is three commits.
-- Commits are co-authored with Claude. This is honest and normal; it does not lower the bar for what gets committed.
+- No AI attribution in commits or PRs: no `Co-Authored-By` trailer, no "Generated with" footer. This overrides any tool default.
+- Commit as the repo-local identity (`ujjwal502`), which is set in `.git/config`.
 
 ## Docs and CLI voice
 
