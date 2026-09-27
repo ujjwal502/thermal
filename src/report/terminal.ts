@@ -20,7 +20,31 @@ function dailySpend(turns: Turn[]): number[] {
   return [...byDay.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([, spend]) => spend)
 }
 
-export function render(input: ReportInput): string {
+/** Breaks prose at spaces so a long detail keeps its indent instead of being
+ *  cut mid-word by the terminal. Each line is painted separately by the caller,
+ *  so colour never spills across a break. */
+export function wrap(text: string, width: number): string[] {
+  const lines: string[] = []
+  let line = ''
+  for (const word of text.split(' ')) {
+    if (line && line.length + 1 + word.length > width) {
+      lines.push(line)
+      line = word
+    } else {
+      line = line ? `${line} ${word}` : word
+    }
+  }
+  if (line) lines.push(line)
+  return lines
+}
+
+/** Wide enough for the findings table, narrow enough to read in one sweep. */
+const MAX_WIDTH = 100
+
+export function render(input: ReportInput, width = 80): string {
+  const indented = (text: string, paint: (line: string) => string) =>
+    wrap(text, width - 2).map((line) => `  ${paint(line)}`)
+
   const { turns, findings } = input
   const spend = turns.reduce((usdTotal, turn) => usdTotal + costOf(turn), 0)
   // Attributed waste only. The theoretical floor (every written token billed as
@@ -62,8 +86,8 @@ export function render(input: ReportInput): string {
     const tag = finding.severity === 'critical' ? critical('critical') : secondary(finding.severity)
     out.push(`  ${bold(finding.title.padEnd(44))}${bold(usd(finding.wastedUSD).padStart(11))}`)
     out.push(`  ${muted(finding.id)} ${muted('·')} ${tag} ${muted(`· ${finding.occurrences} occurrences · ${count(finding.wastedTokens)} tokens`)}`)
-    out.push(`  ${secondary(finding.detail)}`)
-    out.push(`  ${muted(finding.fix)}`)
+    out.push(...indented(finding.detail, secondary))
+    out.push(...indented(finding.fix, muted))
     out.push('')
   }
 
@@ -74,13 +98,13 @@ export function render(input: ReportInput): string {
   ]
   if (input.skippedLines > 0) notes.push(`${input.skippedLines} unreadable lines skipped`)
   if (unpricedModels.size > 0) notes.push(`unpriced models excluded: ${[...unpricedModels].join(', ')}`)
-  out.push(muted(`  ${notes.join('  ·  ')}`))
+  out.push(...indented(notes.join('  ·  '), muted))
   out.push('')
   return out.join('\n')
 }
 
 export function print(input: ReportInput): void {
-  console.log(render(input))
+  console.log(render(input, Math.min(process.stdout.columns || 80, MAX_WIDTH)))
 }
 
 export function printDashboard(url: string): void {
