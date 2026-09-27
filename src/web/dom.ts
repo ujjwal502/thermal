@@ -43,7 +43,7 @@ export function svg<K extends keyof SVGElementTagNameMap>(
 }
 
 export function usd(amount: number): string {
-  if (amount > 0 && amount < 0.01) return '<$0.01'
+  if (amount > 0 && amount < 0.01) return `$${amount.toFixed(4)}`
   return `$${amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 }
 

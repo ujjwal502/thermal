@@ -300,3 +300,34 @@ test('separate conversations sharing a system prompt are not mistaken for a brea
   capture.observe(turnOf('09:06:00', ['Can I cancel my order?'], true))
   assert.deepEqual(capture.findings.filter((f) => f.id === 'prefix-invalidated'), [])
 })
+
+test('a prefix break is priced as rewriting everything back to the last usable breakpoint', () => {
+  const capture = new Capture()
+  const at = (time: string) => ({
+    model: 'claude-sonnet-5',
+    system: [{ type: 'text', text: `${rules}\nCurrent time: ${time}`, cache_control: { type: 'ephemeral' } }],
+    messages: [{ role: 'user', content: 'Where is my refund?' }],
+  })
+  capture.observe(at('18:00:51'))
+  const broken = capture.observe(at('18:00:53'))
+  capture.observeUsage({ promptTokens: 2246, cachedTokens: 0 }, 'anthropic', broken)
+
+  const cost = capture.findings.find((f) => f.id === 'prefix-invalidated')?.wastedUSD
+  // 2246 tokens written at $2.50/M instead of read at $0.20/M, less the
+  // uncached question after the breakpoint.
+  assert.ok(cost !== null && cost !== undefined && cost > 0.0045 && cost < 0.0052, `cost was ${cost}`)
+})
+
+test('a break on a model with no known price has no cost rather than $0', () => {
+  const capture = new Capture()
+  const at = (time: string) => ({
+    model: 'unreleased-model',
+    system: [{ type: 'text', text: `${rules}\nCurrent time: ${time}`, cache_control: { type: 'ephemeral' } }],
+    messages: [{ role: 'user', content: 'q' }],
+  })
+  capture.observe(at('1'))
+  capture.observe(at('2'))
+  const finding = capture.findings.find((f) => f.id === 'prefix-invalidated')
+  assert.ok(finding, 'expected the break to be reported')
+  assert.equal(finding.wastedUSD, null)
+})

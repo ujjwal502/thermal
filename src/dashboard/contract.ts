@@ -107,6 +107,7 @@ export interface Exchange {
     offset: number
     segment: SegmentName
     offsetInSegment: number
+    reusableUntil: number
     before: string
     after: string
   } | null
@@ -116,6 +117,8 @@ export interface Exchange {
 export interface LiveFindingRow {
   id: string
   title: string
+  /** Estimated. Null where Thermal cannot price the finding. */
+  wastedUSD: number | null
   detail: string
   fix: string
   at: string

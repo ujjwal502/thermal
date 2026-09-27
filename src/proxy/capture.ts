@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import type { Divergence, Provider, RenderedPrefix, RequestBody, SegmentName } from './prefix.ts'
 import { continues, conversationKey, firstDivergence, render, toolSerialisationChanged } from './prefix.ts'
-import { readSavings } from '../pricing.ts'
+import { readSavings, rebuildCost } from '../pricing.ts'
 import type { ObservedUsage } from './usage.ts'
 import type { Exchange, Live } from '../dashboard/contract.ts'
 
@@ -10,6 +10,9 @@ export interface LiveFinding {
   title: string
   detail: string
   fix: string
+  /** Estimated from bytes, and from the provider's token counts once the
+   *  response arrives. Null where Thermal cannot price the finding. */
+  wastedUSD: number | null
   at: Date
   /** The exchange that triggered it, so the live view can show its prefix. */
   exchange: number
@@ -162,7 +165,7 @@ export class Capture {
       const divergence = firstDivergence(previous.prefix, prefix)
       if (divergence) {
         exchange.divergence = divergence
-        this.#recordDivergence(divergence, exchange)
+        this.#recordDivergence(divergence, prefix, exchange)
       }
     }
     return exchange
@@ -174,6 +177,7 @@ export class Capture {
   observeUsage(usage: ObservedUsage, provider: Provider, exchange: Exchange): void {
     exchange.promptTokens = usage.promptTokens
     exchange.cachedTokens = usage.cachedTokens
+    this.#repriceBreak(exchange)
     if (usage.promptTokens > 0) {
       this.totals.withUsage++
       this.totals.promptTokens += usage.promptTokens
@@ -233,21 +237,38 @@ export class Capture {
     })
   }
 
-  #recordDivergence(divergence: Divergence, exchange: Exchange): void {
+  #recordDivergence(divergence: Divergence, prefix: RenderedPrefix, exchange: Exchange): void {
+    const lost = (prefix.cacheEndsAt ?? divergence.offset) - divergence.reusableUntil
+    const reuse =
+      divergence.reusableUntil === 0
+        ? `The change comes before every cache breakpoint, so none of the cached prefix could be reused: all ${lost} bytes were written again.`
+        : `The cache was read up to byte ${divergence.reusableUntil}, the last breakpoint before the change; the ${lost} bytes after it were written again.`
     this.#record(exchange, {
       id: 'prefix-invalidated',
       title: `Prefix broke in ${divergence.segment}, ${divergence.offsetInSegment} bytes in`,
+      wastedUSD: rebuildCost(lost / CHARS_PER_TOKEN, exchange.model) ?? null,
       detail:
-        `Everything from byte ${divergence.offset} onward was recomputed.\n` +
+        `${reuse}\n` +
         `      was: ${JSON.stringify(divergence.before)}\n` +
         `      now: ${JSON.stringify(divergence.after)}`,
       fix: DIVERGENCE_FIX[divergence.segment],
     })
   }
 
-  #record(exchange: Exchange, finding: Omit<LiveFinding, 'at' | 'exchange'>): void {
+  /** Once the response reports how many tokens the prompt really was, the
+   *  bytes-to-tokens guess behind a break's cost gives way to that ratio. */
+  #repriceBreak(exchange: Exchange): void {
+    const divergence = exchange.divergence
+    const finding = this.findings.find((f) => f.exchange === exchange.n && f.id === 'prefix-invalidated')
+    if (!divergence || !finding || !exchange.promptTokens || exchange.cacheEndsAt === null) return
+    const chars = exchange.segments.reduce((n, segment) => n + segment.chars, 0)
+    const lostTokens = ((exchange.cacheEndsAt - divergence.reusableUntil) * exchange.promptTokens) / chars
+    finding.wastedUSD = rebuildCost(lostTokens, exchange.model) ?? null
+  }
+
+  #record(exchange: Exchange, finding: Omit<LiveFinding, 'at' | 'exchange' | 'wastedUSD'> & { wastedUSD?: number | null }): void {
     exchange.findings.push(finding.id)
-    this.findings.push({ ...finding, at: new Date(), exchange: exchange.n })
+    this.findings.push({ ...finding, wastedUSD: finding.wastedUSD ?? null, at: new Date(), exchange: exchange.n })
   }
 
   snapshot(upstream: string): Live {

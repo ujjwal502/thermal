@@ -102,3 +102,20 @@ test('a Chat Completions system message renders as the system segment, bytes unc
   assert.equal(prefix.segments.find((s) => s.name === 'system')?.text, JSON.stringify(body.messages[0]))
   assert.equal(prefix.text, body.messages.map((m) => JSON.stringify(m)).join(''))
 })
+
+test('a change before every breakpoint leaves nothing of the cached prefix reusable', () => {
+  const at = (time: string) => render({ system: [{ type: 'text', text: `rules. time ${time}`, cache_control: { type: 'ephemeral' } }], messages: [] })
+  assert.equal(firstDivergence(at('10:00'), at('10:01'))?.reusableUntil, 0)
+})
+
+test('a change after an earlier breakpoint can still reuse the cache up to it', () => {
+  const at = (time: string) =>
+    render({
+      tools: [{ name: 'read', cache_control: { type: 'ephemeral' } }],
+      system: [{ type: 'text', text: `rules. time ${time}`, cache_control: { type: 'ephemeral' } }],
+      messages: [],
+    })
+  const divergence = firstDivergence(at('10:00'), at('10:01'))
+  assert.ok(divergence && divergence.reusableUntil > 0)
+  assert.equal(divergence.reusableUntil, at('10:00').breakpointsAt[0])
+})

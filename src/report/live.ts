@@ -1,5 +1,5 @@
 import type { LiveFinding } from '../proxy/capture.ts'
-import { bold, critical, muted, secondary } from './format.ts'
+import { bold, critical, estimate, muted, secondary } from './format.ts'
 
 export function printListening(url: string, upstream: string): void {
   // The OpenAI SDK's base URL includes the /v1 segment; Anthropic's does not.
@@ -22,7 +22,8 @@ export function printListening(url: string, upstream: string): void {
 }
 
 export function printFinding(finding: LiveFinding): void {
-  console.log(`  ${critical(finding.id)}  ${bold(finding.title)}`)
+  const cost = finding.wastedUSD === null ? '' : `  ${bold(estimate(finding.wastedUSD))}`
+  console.log(`  ${critical(finding.id)}  ${bold(finding.title)}${cost}`)
   console.log(`      ${secondary(finding.detail)}`)
   console.log(`      ${muted(finding.fix)}\n`)
 }
@@ -56,6 +57,11 @@ export function printSummary(findings: LiveFinding[], requests: number, totals: 
   }
   for (const [id, count] of [...counts].sort((a, b) => b[1] - a[1])) {
     console.log(`  ${bold(String(count).padStart(5))}  ${id}`)
+  }
+  const priced = findings.filter((finding) => finding.wastedUSD !== null)
+  if (priced.length > 0) {
+    const total = priced.reduce((usd, finding) => usd + (finding.wastedUSD ?? 0), 0)
+    console.log(`  ${muted('estimated cost of these breaks')}  ${bold(estimate(total))}`)
   }
   console.log('')
 }

@@ -34,6 +34,8 @@ export interface RenderedPrefix {
    *  cached, so a change after it costs nothing and must not be reported.
    *  Undefined when the request asks for no caching at all. */
   cacheEndsAt: number | undefined
+  /** Offsets of every cache_control marker, in order. */
+  breakpointsAt: number[]
 }
 
 export interface RequestBody {
@@ -120,13 +122,17 @@ export function render(body: RequestBody, provider: Provider = 'anthropic'): Ren
     text += parts[name]
   }
 
-  const marker = text.lastIndexOf('"cache_control"')
+  const breakpointsAt: number[] = []
+  for (let at = text.indexOf('"cache_control"'); at !== -1; at = text.indexOf('"cache_control"', at + 1)) {
+    breakpointsAt.push(at)
+  }
   return {
     text,
     segments,
     breakpoints: countBreakpoints(body.tools) + countBreakpoints(body.system) + countBreakpoints(body.messages),
     toolNames: toolNamesOf(body.tools),
-    cacheEndsAt: marker === -1 ? undefined : marker,
+    cacheEndsAt: breakpointsAt.at(-1),
+    breakpointsAt,
   }
 }
 
@@ -146,14 +152,19 @@ export interface Divergence {
   segment: SegmentName
   /** Offset within that segment, which is what a person needs to find it. */
   offsetInSegment: number
+  /** Bytes before this could still be read from cache. The cache is keyed on
+   *  the whole prefix up to each breakpoint, so a change loses everything back
+   *  to the last breakpoint before it - byte 0 when there is none - not merely
+   *  the bytes after the change. */
+  reusableUntil: number
   before: string
   after: string
 }
 
 const CONTEXT = 60
 
-/** The first byte at which two prefixes stop matching. Everything from here on
- *  is a cache miss, so this single offset is the whole diagnosis. */
+/** The first byte at which two prefixes stop matching: the whole diagnosis of
+ *  where the prefix broke. What the break cost reaches back to reusableUntil. */
 export function firstDivergence(previous: RenderedPrefix, current: RenderedPrefix): Divergence | undefined {
   const limit = Math.min(previous.text.length, current.text.length)
   let offset = 0
@@ -177,14 +188,12 @@ export function firstDivergence(previous: RenderedPrefix, current: RenderedPrefi
     offset,
     segment: home.name,
     offsetInSegment: offset - home.start,
+    reusableUntil: current.breakpointsAt.filter((at) => at < offset).at(-1) ?? 0,
     before: previous.text.slice(Math.max(0, offset - CONTEXT / 2), offset + CONTEXT),
     after: current.text.slice(Math.max(0, offset - CONTEXT / 2), offset + CONTEXT),
   }
 }
 
-/** Requests belong to the same conversation when they open with the same first
- *  message. It is a heuristic, but a first message is stable for a conversation
- *  and cheap to key on. */
 function messagesOf(body: RequestBody): unknown[] {
   const conversation = body.messages ?? body.input
   return Array.isArray(conversation) ? conversation : []
@@ -218,6 +227,9 @@ export function continues(previous: RequestBody, current: RequestBody): boolean 
   return same * 2 >= before.length
 }
 
+/** Requests belong to the same conversation when they open with the same first
+ *  message. It is a heuristic, but a first message is stable for a conversation
+ *  and cheap to key on. */
 export function conversationKey(body: RequestBody): string {
   const conversation = body.messages ?? body.input
   const first = Array.isArray(conversation) ? conversation[0] : conversation

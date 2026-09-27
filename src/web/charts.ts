@@ -165,7 +165,7 @@ export function cacheBoundary(exchange: Exchange, total: number): number | null 
   if (exchange.promptTokens && exchange.cachedTokens !== null) {
     return Math.round((total * exchange.cachedTokens) / exchange.promptTokens)
   }
-  return exchange.divergence ? exchange.divergence.offset : null
+  return exchange.divergence ? exchange.divergence.reusableUntil : null
 }
 
 /** The request as one bar in render order - tools, system, messages - each

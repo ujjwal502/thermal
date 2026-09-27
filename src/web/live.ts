@@ -1,6 +1,6 @@
 import type { Exchange, Live, LiveFindingRow } from '../dashboard/contract.ts'
 import { cacheBoundary, ribbon, xray } from './charts.ts'
-import { clock, compact, h, heat, pct, rampLegend, swatch } from './dom.ts'
+import { clock, compact, h, heat, pct, rampLegend, swatch, usd } from './dom.ts'
 import { table } from './table.ts'
 
 function plural(n: number, noun: string): string {
@@ -62,7 +62,7 @@ function inspector(exchange: Exchange | undefined, findings: LiveFindingRow[]): 
     h('p', { class: 'caption' }, source),
     ...findings
       .filter((f) => f.exchange === exchange.n)
-      .map((f) => h('div', { style: 'margin-top: 16px' }, h('div', {}, h('b', {}, f.title), h('span', { class: 'muted' }, `  ${f.id}`)), h('p', { style: 'margin: 4px 0' }, f.detail.split('\n')[0]), h('p', { class: 'fix', style: 'margin: 0' }, f.fix))),
+      .map((f) => h('div', { style: 'margin-top: 16px' }, h('div', {}, h('b', {}, f.title), f.wastedUSD === null ? null : h('b', {}, `  ~${usd(f.wastedUSD)}`), h('span', { class: 'muted' }, `  ${f.id}`)), h('p', { style: 'margin: 4px 0' }, f.detail.split('\n')[0]), h('p', { class: 'fix', style: 'margin: 0' }, f.fix))),
     exchange.divergence ? h('div', { style: 'margin-top: 16px' }, diff(exchange.divergence.before, exchange.divergence.after)) : null,
     h('div', { style: 'margin-top: 16px' },
       table(exchange.segments, [
@@ -141,6 +141,7 @@ export function liveView(live: Live, selected: number | null, select: (n: number
               { label: 'Time', className: 'muted', cell: (f) => clock(f.at) },
               { label: 'Finding', cell: (f) => f.title },
               { label: 'Detector', className: 'id', cell: (f) => f.id },
+              { label: 'Cost', num: true, className: 'dollars', cell: (f) => (f.wastedUSD === null ? h('span', { class: 'muted' }, '-') : `~${usd(f.wastedUSD)}`) },
             ], {
               primary: true,
               selected: (f) => f.exchange === current?.n,

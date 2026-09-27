@@ -52,6 +52,15 @@ export function ttlPremium(tokens: number, model: string): number {
   return perMillion(tokens, rate.input * (WRITE_1H_MULTIPLIER - WRITE_5M_MULTIPLIER))
 }
 
+/** What it costs to write cacheable tokens again instead of reading them. Priced
+ *  at the 5m write rate, the cheaper of the two, so a break is never overstated.
+ *  Undefined for a model with no known price rather than a misleading $0. */
+export function rebuildCost(tokens: number, model: string): number | undefined {
+  const rate = rateFor(model)
+  if (!rate) return undefined
+  return perMillion(tokens, rate.input * WRITE_5M_MULTIPLIER - rate.cacheRead)
+}
+
 /** What a cache read saved versus paying full input price for the same tokens. */
 export function readSavings(tokens: number, model: string): number {
   const rate = rateFor(model)

@@ -13,6 +13,10 @@ export const bold = (text: string) => (enabled ? `\x1b[1m${text}\x1b[0m` : text)
 
 export const usd = (amount: number) => `$${amount.toFixed(2)}`
 
+/** A single live break often costs under a cent, which two decimals round to
+ *  nothing. The tilde marks it as estimated. */
+export const estimate = (amount: number) => `~$${amount.toFixed(amount < 1 ? 4 : 2)}`
+
 export function count(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
   if (n >= 1_000) return `${(n / 1_000).toFixed(0)}K`
