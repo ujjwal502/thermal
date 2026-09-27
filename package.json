@@ -1,14 +1,19 @@
 {
-  "name": "thermal",
-  "version": "0.0.1",
-  "private": true,
+  "name": "thermal-cache",
+  "version": "0.1.0",
+  "description": "Find where LLM prompt caching broke and what it cost",
+  "license": "MIT",
+  "author": "Ujjwal",
   "type": "module",
-  "bin": { "thermal": "./src/cli.ts" },
+  "bin": { "thermal": "dist/cli.js" },
+  "files": ["dist"],
   "scripts": {
-    "build": "tsc --noEmit",
+    "build": "tsc --noEmit && tsc -p tsconfig.build.json",
     "test": "node --test \"test/**/*.test.ts\"",
-    "start": "node src/cli.ts"
+    "start": "node src/cli.ts",
+    "prepack": "npm run build"
   },
-  "engines": { "node": ">=22.6" },
-  "devDependencies": { "typescript": "^5.7.0", "@types/node": "^22.10.0" }
+  "keywords": ["prompt-caching", "anthropic", "openai", "claude-code", "llm", "cost"],
+  "engines": { "node": ">=20" },
+  "devDependencies": { "typescript": "^5.7.0", "@types/node": "^20.17.0" }
 }
