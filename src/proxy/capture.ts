@@ -35,6 +35,12 @@ const DIVERGENCE_FIX: Record<SegmentName, string> = {
     'An earlier message changed between requests. Keep the history append-only and send anything that varies per call in the latest user message, after the last cache breakpoint.',
 }
 
+/** Prompt bytes as they are, except the whitespace that would break the
+ *  report's layout. Escaping every quote made JSON unreadable. */
+function visible(text: string): string {
+  return text.replaceAll('\n', '\\n').replaceAll('\t', '\\t').replaceAll('\r', '\\r')
+}
+
 /** Enough history to scroll back through a working session; the live view
  *  polls the whole list, so it must stay small. */
 const KEPT_EXCHANGES = 200
@@ -249,8 +255,8 @@ export class Capture {
       wastedUSD: rebuildCost(lost / CHARS_PER_TOKEN, exchange.model) ?? null,
       detail:
         `${reuse}\n` +
-        `      was: ${JSON.stringify(divergence.before)}\n` +
-        `      now: ${JSON.stringify(divergence.after)}`,
+        `      was: ${visible(divergence.before)}\n` +
+        `      now: ${visible(divergence.after)}`,
       fix: DIVERGENCE_FIX[divergence.segment],
     })
   }

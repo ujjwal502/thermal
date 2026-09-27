@@ -119,3 +119,12 @@ test('a change after an earlier breakpoint can still reuse the cache up to it', 
   assert.ok(divergence && divergence.reusableUntil > 0)
   assert.equal(divergence.reusableUntil, at('10:00').breakpointsAt[0])
 })
+
+test('the excerpt around a break starts and ends on a boundary, not mid-word', () => {
+  const at = (time: string) =>
+    render({ system: [{ type: 'text', text: `${'policy text. '.repeat(20)}Current time: 2026-09-27T18:00:${time}Z`, cache_control: { type: 'ephemeral' } }], messages: [] })
+  const divergence = firstDivergence(at('51'), at('53'))
+  assert.ok(divergence)
+  assert.match(divergence.before, /^time: 2026-09-27T18:00:51Z/)
+  assert.match(divergence.after, /^time: 2026-09-27T18:00:53Z/)
+})

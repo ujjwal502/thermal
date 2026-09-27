@@ -162,6 +162,23 @@ export interface Divergence {
 }
 
 const CONTEXT = 60
+const BOUNDARY = /[\s",:{}[\]]/
+
+/** The bytes around a divergence, trimmed inward to word or JSON boundaries so
+ *  the excerpt reads "time: 10:04:11Z" rather than "urrent time: 10:04:11Z". */
+function excerpt(text: string, offset: number): string {
+  let start = Math.max(0, offset - CONTEXT / 2)
+  let end = Math.min(text.length, offset + CONTEXT)
+  if (start > 0) {
+    const cut = text.slice(start, offset).search(BOUNDARY)
+    if (cut !== -1) start += cut + 1
+  }
+  if (end < text.length) {
+    const upToLastBoundary = /^[\s\S]*[\s",:{}[\]]/.exec(text.slice(offset + 1, end))
+    if (upToLastBoundary) end = offset + upToLastBoundary[0].length
+  }
+  return text.slice(start, end)
+}
 
 /** The first byte at which two prefixes stop matching: the whole diagnosis of
  *  where the prefix broke. What the break cost reaches back to reusableUntil. */
@@ -189,8 +206,8 @@ export function firstDivergence(previous: RenderedPrefix, current: RenderedPrefi
     segment: home.name,
     offsetInSegment: offset - home.start,
     reusableUntil: current.breakpointsAt.filter((at) => at < offset).at(-1) ?? 0,
-    before: previous.text.slice(Math.max(0, offset - CONTEXT / 2), offset + CONTEXT),
-    after: current.text.slice(Math.max(0, offset - CONTEXT / 2), offset + CONTEXT),
+    before: excerpt(previous.text, offset),
+    after: excerpt(current.text, offset),
   }
 }
 
