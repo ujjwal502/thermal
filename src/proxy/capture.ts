@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import type { Divergence, Provider, RenderedPrefix, RequestBody } from './prefix.ts'
+import type { Divergence, Provider, RenderedPrefix, RequestBody, SegmentName } from './prefix.ts'
 import { conversationKey, firstDivergence, render, toolSerialisationChanged } from './prefix.ts'
 import { readSavings } from '../pricing.ts'
 import type { ObservedUsage } from './usage.ts'
@@ -18,6 +18,18 @@ export interface LiveFinding {
 interface Seen {
   body: RequestBody
   prefix: RenderedPrefix
+}
+
+/** Where the changing part belongs, per segment. The destination has to be
+ *  named: "move it out of the system prompt" alone sent people to the start of
+ *  the messages, which breaks a cached history just the same. */
+const DIVERGENCE_FIX: Record<SegmentName, string> = {
+  tools:
+    'A tool definition changes between requests. Keep the tool list and every schema byte-identical for the whole conversation.',
+  system:
+    'Something in the system prompt changes per request, usually a timestamp. Keep the system prompt identical and send the changing part at the end of the request, in the latest user message, after the last cache breakpoint.',
+  messages:
+    'An earlier message changed between requests. Keep the history append-only and send anything that varies per call in the latest user message, after the last cache breakpoint.',
 }
 
 /** Enough history to scroll back through a working session; the live view
@@ -221,10 +233,7 @@ export class Capture {
         `Everything from byte ${divergence.offset} onward was recomputed.\n` +
         `      was: ${JSON.stringify(divergence.before)}\n` +
         `      now: ${JSON.stringify(divergence.after)}`,
-      fix:
-        divergence.segment === 'system'
-          ? 'Something in the system prompt changes per request. A timestamp is the usual culprit.'
-          : 'Move whatever changes here after the last cache breakpoint.',
+      fix: DIVERGENCE_FIX[divergence.segment],
     })
   }
 

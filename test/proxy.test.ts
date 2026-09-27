@@ -249,3 +249,12 @@ test('prompts under the 1024-token OpenAI minimum never count as misses', () => 
   }
   assert.deepEqual(capture.findings, [])
 })
+
+test('a break in the system prompt names where the changing part should go', () => {
+  const fresh = new Capture()
+  const cached = (text: string) => ({ ...request(''), system: [{ type: 'text', text, cache_control: { type: 'ephemeral' } }] })
+  fresh.observe(cached('You are helpful. 12:04:11'))
+  fresh.observe(cached('You are helpful. 12:04:39'))
+  const finding = fresh.findings.find((f) => f.id === 'prefix-invalidated')
+  assert.match(finding?.fix ?? '', /latest user message, after the last cache breakpoint/)
+})
