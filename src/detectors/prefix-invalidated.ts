@@ -1,4 +1,4 @@
-import type { Detector, Finding, Turn } from '../types.ts'
+import type { Detector, Finding, Site, Turn } from '../types.ts'
 import { writeCost } from '../pricing.ts'
 import { bySession } from './group.ts'
 
@@ -14,6 +14,7 @@ export const prefixInvalidated: Detector = {
     let rewriteCost = 0
     let rewriteTokens = 0
     const reasons = new Map<string, number>()
+    const sites: Site[] = []
 
     for (const session of bySession(turns).values()) {
       for (let i = 1; i < session.length; i++) {
@@ -25,7 +26,9 @@ export const prefixInvalidated: Detector = {
 
         breaks++
         rewriteTokens += rewrote
-        rewriteCost += writeCost(current)
+        const cost = writeCost(current)
+        rewriteCost += cost
+        sites.push({ turn: current, wastedUSD: cost })
         if (current.cacheMissReason) {
           reasons.set(current.cacheMissReason, (reasons.get(current.cacheMissReason) ?? 0) + 1)
         }
@@ -50,6 +53,7 @@ export const prefixInvalidated: Detector = {
           `${breaks} times a warm cache went cold and was rebuilt from scratch.` +
           (attributed ? ` Anthropic attributed some of these: ${attributed}.` : ''),
         fix: 'Logs hold token counts, not request bodies, so Thermal can say when this happened but not which byte caused it. Proxy mode will diff the prefix.',
+        sites,
       },
     ]
   },

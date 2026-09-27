@@ -1,4 +1,4 @@
-import type { Detector, Finding, Turn } from '../types.ts'
+import type { Detector, Finding, Site, Turn } from '../types.ts'
 import { ttlPremium } from '../pricing.ts'
 import { bySession } from './group.ts'
 
@@ -20,6 +20,7 @@ export const ttlPremiumWasted: Detector = {
     let wastedTokens = 0
     let writes = 0
     let justified = 0
+    const sites: Site[] = []
 
     for (const session of bySession(turns).values()) {
       const touching = session.filter(
@@ -40,7 +41,9 @@ export const ttlPremiumWasted: Detector = {
 
         writes++
         wastedTokens += write.cacheWrite1hTokens
-        wastedUSD += ttlPremium(write.cacheWrite1hTokens, write.model)
+        const premium = ttlPremium(write.cacheWrite1hTokens, write.model)
+        wastedUSD += premium
+        sites.push({ turn: write, wastedUSD: premium })
       }
     }
 
@@ -55,6 +58,7 @@ export const ttlPremiumWasted: Detector = {
         occurrences: writes,
         detail: `${writes} writes paid the 1-hour rate with the next request following within two minutes, where a self-refreshing 5m cache would have served it. ${justified} writes may have genuinely needed the longer life.`,
         fix: 'Use the 5m TTL for continuous work. The 1h rate only pays off when requests sharing a prefix start more than five minutes apart.',
+        sites,
       },
     ]
   },

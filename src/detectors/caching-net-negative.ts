@@ -1,4 +1,4 @@
-import type { Detector, Finding, Turn } from '../types.ts'
+import type { Detector, Finding, Site, Turn } from '../types.ts'
 import { readSavings, writeCost } from '../pricing.ts'
 import { bySession } from './group.ts'
 
@@ -11,6 +11,7 @@ export const cachingNetNegative: Detector = {
     let net = 0
     let sessions = 0
     let tokens = 0
+    const sites: Site[] = []
 
     for (const session of bySession(turns).values()) {
       const read = session.reduce((n, t) => n + t.cacheReadTokens, 0)
@@ -23,6 +24,13 @@ export const cachingNetNegative: Detector = {
       sessions++
       net += written - saved
       tokens += session.reduce((n, t) => n + t.cacheWrite5mTokens + t.cacheWrite1hTokens, 0)
+      // The loss belongs to the session, not one turn. Spread it over the turns
+      // that paid for writes, in proportion to what each paid.
+      const lossPerWriteDollar = (written - saved) / written
+      for (const t of session) {
+        const cost = writeCost(t)
+        if (cost > 0) sites.push({ turn: t, wastedUSD: cost * lossPerWriteDollar })
+      }
     }
 
     if (sessions === 0) return []
@@ -36,6 +44,7 @@ export const cachingNetNegative: Detector = {
         occurrences: sessions,
         detail: `${sessions} sessions spent more on cache writes than their reads ever recovered.`,
         fix: 'These sessions are too short or too volatile to amortise a write. Cache fewer breakpoints, or none, for this shape of work.',
+        sites,
       },
     ]
   },

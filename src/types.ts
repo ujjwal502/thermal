@@ -13,6 +13,14 @@ export interface Turn {
   cacheMissReason?: string
 }
 
+/** One turn a finding blames, and its share of the waste. The terminal report
+ *  only needs totals; the dashboard needs these to place waste in time and to
+ *  mark the turn where a cache broke. */
+export interface Site {
+  turn: Turn
+  wastedUSD: number
+}
+
 export interface Finding {
   id: string
   severity: 'critical' | 'warning' | 'info'
@@ -22,6 +30,7 @@ export interface Finding {
   occurrences: number
   detail: string
   fix: string
+  sites: Site[]
 }
 
 export interface Detector {

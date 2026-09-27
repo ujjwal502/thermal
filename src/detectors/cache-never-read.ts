@@ -1,4 +1,4 @@
-import type { Detector, Finding, Turn } from '../types.ts'
+import type { Detector, Finding, Site, Turn } from '../types.ts'
 import { writeCost } from '../pricing.ts'
 import { bySession } from './group.ts'
 
@@ -11,6 +11,7 @@ export const cacheNeverRead: Detector = {
     let wastedUSD = 0
     let wastedTokens = 0
     let sessions = 0
+    const sites: Site[] = []
 
     for (const session of bySession(turns).values()) {
       if (session.length < 2) continue
@@ -20,7 +21,12 @@ export const cacheNeverRead: Detector = {
 
       sessions++
       wastedTokens += written
-      wastedUSD += session.reduce((usd, t) => usd + writeCost(t), 0)
+      for (const t of session) {
+        const cost = writeCost(t)
+        if (cost === 0) continue
+        wastedUSD += cost
+        sites.push({ turn: t, wastedUSD: cost })
+      }
     }
 
     if (sessions === 0) return []
@@ -34,6 +40,7 @@ export const cacheNeverRead: Detector = {
         occurrences: sessions,
         detail: `${sessions} sessions paid to write a cache and never read from it once.`,
         fix: 'The prefix is changing on every call. Look for a timestamp, a counter, or a varying tool list ahead of the last cache breakpoint.',
+        sites,
       },
     ]
   },
