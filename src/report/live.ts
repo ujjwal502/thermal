@@ -2,12 +2,16 @@ import type { LiveFinding } from '../proxy/capture.ts'
 import { bold, critical, muted, secondary } from './format.ts'
 
 export function printListening(url: string, upstream: string): void {
+  // The OpenAI SDK's base URL includes the /v1 segment; Anthropic's does not.
+  const exportLine = new URL(upstream).hostname.endsWith('openai.com')
+    ? `OPENAI_BASE_URL=${url}/v1`
+    : `ANTHROPIC_BASE_URL=${url}`
   console.log(`
   ${bold('thermal proxy')} ${muted('listening on')} ${bold(url)}
   ${muted('forwarding to')} ${secondary(upstream)}
 
   ${secondary('Point your agent at it and keep working:')}
-    ${muted('export ANTHROPIC_BASE_URL=')}${url}
+    ${muted('export')} ${exportLine}
 
   ${muted('Requests pass through untouched. Analysis runs after each response.')}
   ${muted('Nothing is written to disk and nothing leaves this machine.')}

@@ -59,6 +59,10 @@ function runProxy(portText: string | undefined, upstreamText: string | undefined
   }
 
   const upstream = upstreamText ?? 'https://api.anthropic.com'
+  if (!URL.canParse(upstream)) {
+    printError(`--upstream expects a full URL such as https://api.openai.com, got "${upstream}".`)
+    return Promise.resolve(1)
+  }
   const capture = new Capture()
 
   return new Promise<number>((resolve) => {
