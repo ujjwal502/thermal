@@ -11,12 +11,14 @@ let proxyUrl = ''
 let capture: Capture
 let proxy: { close(): Promise<void> }
 const errors: string[] = []
+let upstreamHits = 0
 
 /** Stands in for the Messages API: echoes what it was sent, and streams when
  *  asked, so the test can prove bytes survive the round trip. */
 function stubUpstream(): Promise<Server> {
   return new Promise((resolve) => {
     const server = createServer((request, response) => {
+      upstreamHits++
       const chunks: Buffer[] = []
       request.on('data', (chunk: Buffer) => chunks.push(chunk))
       request.on('end', () => {
@@ -161,4 +163,15 @@ test('a short prompt is not worth caching and is not flagged', () => {
   fresh.observe(request('short'))
   fresh.observe(request('short', { messages: [{ role: 'user', content: 'other' }] }))
   assert.equal(fresh.findings.find((f) => f.id === 'cacheable-prefix-uncached'), undefined)
+})
+
+test('a path that looks like another host is still forwarded to the configured upstream', async () => {
+  const before = upstreamHits
+  const response = await fetch(`${proxyUrl}//elsewhere.example/v1/messages`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-api-key': 'test-key' },
+    body: JSON.stringify(request('You are helpful.')),
+  })
+  assert.equal(response.status, 200)
+  assert.equal(upstreamHits, before + 1)
 })

@@ -59,7 +59,9 @@ async function handle(
   options: ProxyOptions,
 ): Promise<void> {
   const raw = await readBody(request)
-  const target = new URL(request.url ?? '/', options.upstream)
+  // Resolving the path against the upstream would let //other.host/... replace
+  // the host, sending the caller's API key somewhere they never configured.
+  const target = new URL(`${new URL(options.upstream).origin}${request.url ?? '/'}`)
 
   const upstream = await fetch(target, {
     method: request.method,
