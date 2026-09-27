@@ -95,3 +95,10 @@ test('conversation key survives the conversation growing', () => {
 test('conversation key differs for a different opening message', () => {
   assert.notEqual(conversationKey(body()), conversationKey(body({ messages: [{ role: 'user', content: 'other' }] })))
 })
+
+test('a Chat Completions system message renders as the system segment, bytes unchanged', () => {
+  const body = { messages: [{ role: 'system', content: 'policy' }, { role: 'user', content: 'question' }] }
+  const prefix = render(body, 'openai')
+  assert.equal(prefix.segments.find((s) => s.name === 'system')?.text, JSON.stringify(body.messages[0]))
+  assert.equal(prefix.text, body.messages.map((m) => JSON.stringify(m)).join(''))
+})

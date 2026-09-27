@@ -127,7 +127,8 @@ export function liveView(live: Live, selected: number | null, select: (n: number
           if (exchange) select(exchange.n)
         },
       ),
-      h('div', { class: 'legend' }, h('span', {}, 'each cell is one request:'), rampLegend(), h('span', {}, h('span', { style: 'color: var(--critical)' }, '|'), ' prefix changed before the last breakpoint')),
+      h('div', { class: 'legend' }, h('span', {}, 'each cell is one request:'), rampLegend(),
+        exchanges.some((e) => e.divergence !== null) ? h('span', {}, h('span', { style: 'color: var(--critical)' }, '|'), ' prefix changed before the last breakpoint') : null),
     ),
     h(
       'div',

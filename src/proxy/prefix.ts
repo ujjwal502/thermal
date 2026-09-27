@@ -85,11 +85,28 @@ function toolNamesOf(tools: unknown): string[] {
   )
 }
 
+function isInstruction(message: unknown): boolean {
+  const role = typeof message === 'object' && message !== null ? (message as { role?: unknown }).role : undefined
+  return role === 'system' || role === 'developer'
+}
+
 export function render(body: RequestBody, provider: Provider = 'anthropic'): RenderedPrefix {
   // The Responses API calls these instructions and input. Same roles, same
   // position in the prefix, so they fold into the same segments.
-  const systemLike = body.system ?? body.instructions
-  const messagesLike = body.messages ?? body.input
+  let systemLike = body.system ?? body.instructions
+  let messagesLike = body.messages ?? body.input
+
+  // Chat Completions carries the system prompt as leading messages. Splitting
+  // them out leaves the rendered bytes identical - elements concatenate either
+  // way - and only moves the segment boundary to where a person expects it.
+  if (systemLike === undefined && Array.isArray(messagesLike)) {
+    const lead = messagesLike.findIndex((message) => !isInstruction(message))
+    const split = lead === -1 ? messagesLike.length : lead
+    if (split > 0) {
+      systemLike = messagesLike.slice(0, split)
+      messagesLike = messagesLike.slice(split)
+    }
+  }
   const parts: Record<SegmentName, string> = {
     tools: body.tools === undefined ? '' : verbatim(body.tools),
     system: systemLike === undefined ? '' : verbatim(systemLike),
