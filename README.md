@@ -18,6 +18,11 @@ npx thermal-cache proxy      # watch live API traffic from your own agent
 
 Requires Node 20 or later.
 
+![Thermal dashboard: attributable waste, spend by day coloured by cache hit rate, findings ranked by cost, and projects](docs/dashboard.png)
+
+The dashboard on 151 real Claude Code sessions, run with `--redact` so project
+names do not appear.
+
 ## Proxy mode: for agents you build
 
 If you control how prompts are constructed, proxy mode is the useful one. It is
@@ -51,16 +56,11 @@ render order (tools, system, messages) split into cached and recomputed bytes,
 with the diff at the point it broke. Requests under `/_thermal` are answered by
 the proxy and never forwarded.
 
-A finding names the segment and offset where the prefix diverged, with the bytes
-on either side:
+![Thermal live view: a ribbon of twelve requests with one cache break, the broken request drawn as a bar split into cached and recomputed bytes, and the diff at the break](docs/live-view.png)
 
-```
-prefix-invalidated  Prefix broke in system, 2616 bytes in
-    Everything from byte 2616 onward was recomputed.
-    was: "urrent time: 2026-09-21T10:04:11Z\",\"cache_control\":{\"type\":\"ephemeral\"}}..."
-    now: "urrent time: 2026-09-21T10:04:39Z\",\"cache_control\":{\"type\":\"ephemeral\"}}..."
-    Something in the system prompt changes per request. A timestamp is the usual culprit.
-```
+A demo against a local stand-in server: twelve requests whose system prompt ends
+in a timestamp, which changes on request 7. The finding names the segment and
+offset where the prefix diverged, and the diff underlines the bytes that changed.
 
 The summary always states whether usage was read from the responses. If it was
 not, it says so: a clean result from a proxy that measured nothing is unknown,
@@ -92,6 +92,11 @@ session as a turn-by-turn ribbon that marks where the cache went cold. Filters
 for time range and project scope every view, and every view has a URL. Pass
 `--report`, or pipe the output, for the terminal report alone.
 
+![One session as a ribbon of requests: amber cells served from cache, cyan cells recomputed, red lines where a warm cache went cold](docs/session.png)
+
+One session of 61 requests. Each red line marks a request that found a warm
+cache gone cold and paid to rebuild it.
+
 Logs record token counts, not request bodies, so read mode can say when a cache
 went cold but not which byte caused it. That needs proxy mode.
 
@@ -104,6 +109,7 @@ Options:
 
 ```
 --report           terminal report only, no dashboard
+--redact           replace project names and paths, for screenshots you can share
 --root <path>      session directory (default: ~/.claude/projects)
 --since <days>     only requests from the last N days
 --project <name>   only projects whose name contains this
