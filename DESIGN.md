@@ -29,7 +29,7 @@ Dark surface only in v1. This is a deliberate choice for a terminal-adjacent too
 
   --text-primary:   #e8e8e6;
   --text-secondary: #9a9a98;
-  --text-muted:     #5f5f63;
+  --text-muted:     #828286;   /* AA 4.5:1 on surface-0 and surface-2 */
 
   /* Thermal diverging ramp - cache state. Cold = recomputed = expensive.
      Hot = cached = cheap. Both arms validated against #0a0a0b. */
