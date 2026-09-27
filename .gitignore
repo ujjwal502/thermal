@@ -1,3 +1,4 @@
 node_modules/
 dist/
 .thermal-cache/
+.DS_Store

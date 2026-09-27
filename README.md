@@ -70,21 +70,9 @@ not healthy.
 
 With no arguments, Thermal reads Claude Code's session logs from
 `~/.claude/projects` and reports cache hit rate, notional spend, and attributable
-waste. 150 sessions (37K requests) parse in 0.8s.
+waste. 151 sessions (38K requests) parse in 0.9s.
 
-```
-thermal  150 sessions · 8 projects · 37K requests
-
-  $8408.57 at API rates   notional - a subscription is billed differently
-  $717.68 attributable waste   8.5% of the above
-
-  98.1% cache hit rate   222.3M written  11577.4M read
-
-FINDINGS  ranked by cost
-
-  1h cache premium bought nothing                 $692.88
-  ttl-premium-wasted · critical · 29410 occurrences · 182.4M tokens
-```
+![Thermal terminal report: spend at API rates, attributable waste, cache hit rate, a spend sparkline, and findings ranked by cost with their fixes](docs/terminal.jpeg)
 
 After the terminal report, Thermal serves a dashboard on `127.0.0.1:7870` and
 opens it: waste and spend by day, findings with their fixes, projects, and every
