@@ -1,32 +1,55 @@
 # Thermal
 
-**Your AI agents are wasting money on cache misses. Thermal shows you where, and what it costs.**
+Thermal finds where LLM prompt caching broke and what it cost. A local
+forwarding proxy sees each request body and names the byte that broke the
+cached prefix. A read mode analyses the Claude Code session logs already on
+disk, with no configuration.
 
-`npx thermal` — reads the session logs already on your machine, finds the exact moment your prompt cache broke, and tells you what to change.
+The proxy is the product. Read mode is the zero-setup first run. Section 9
+records the measurement that decided this; do not re-prioritise read mode
+without new evidence.
 
 ---
 
 ## 1. Why this exists
 
-Every agent request re-sends the whole conversation. Providers cache a stable *prefix* of that request so repeat calls are far cheaper — but only while the prefix stays byte-identical. Change one character near the front and every subsequent call silently re-pays full price for the entire prefix.
+Every agent request re-sends the whole conversation. Providers cache a stable
+*prefix* of that request so repeat calls cost a fraction of input price, but
+only while the prefix stays byte-identical. Change one byte before the cached
+boundary and the provider writes the prefix again at full price or more.
 
-**There is no error. No warning. No log line.** The bill just goes up.
-
-Today's tools tell you *what* you spent. None tell you *why*. Thermal answers why.
+Nothing fails when this happens. There is no error and no log line; the usage
+fields change and the bill goes up. Spend dashboards report what was spent, not
+which byte caused it. Thermal reports the byte.
 
 ### The metaphor
 
-Cached context is **hot** — cheap, already paid for. Uncached context is **cold** — recomputed from scratch, full price. Thermal renders your context window as a heat map, and the product's whole visual language follows from that.
+Cached context is **hot**: already paid for, read cheaply. Uncached context is
+**cold**: recomputed at full price. The visual language in `DESIGN.md` follows
+from that.
 
 ### Who it's for
 
-Individual developers running coding agents (Claude Code, Codex, Cursor) who suspect they're overspending but can't see where. Not teams, not enterprises, not production observability. One person, one laptop, real numbers.
+People building their own agents or LLM features against the Anthropic or
+OpenAI APIs, who control the request and can act on a diagnosis. One developer,
+one machine. Not teams, not production observability.
+
+Claude Code users are the secondary audience. Read mode shows them their
+numbers, but on the evidence so far Claude Code's caching works and its largest
+finding is not the user's to fix (section 9).
 
 ---
 
-## 2. The core insight
+## 2. Two sources of truth
 
-We verified this on a real machine: **the data is already on disk.** Claude Code writes JSONL session transcripts to `~/.claude/projects/`, and every assistant record carries full usage telemetry:
+**Request bodies (proxy mode).** The only place the offending byte is visible.
+Point an agent at the proxy with `ANTHROPIC_BASE_URL` or `OPENAI_BASE_URL`; it
+forwards every request untouched and analyses a copy after the response has
+been delivered.
+
+**Session logs (read mode).** Claude Code writes JSONL transcripts to
+`~/.claude/projects/`, including subagent logs nested four levels deep
+(`<project>/<session>/subagents/*.jsonl`). Every assistant record carries usage:
 
 ```json
 {
@@ -37,101 +60,135 @@ We verified this on a real machine: **the data is already on disk.** Claude Code
   "cache_creation": {
     "ephemeral_1h_input_tokens": 12421,
     "ephemeral_5m_input_tokens": 0
-  },
-  "service_tier": "standard",
-  "speed": "standard"
+  }
 }
 ```
 
-Plus `requestId`, `timestamp`, `durationMs`, `effort`, `sessionId`, `gitBranch`, `cwd`, and the full message content.
-
-**Consequence: version one needs no proxy, no API key, and no configuration.** One command, instant analysis of months of real history. That zero-setup first run is the single most important feature in this document.
+Logs show *that* a cache broke and what it cost, not *where* in the prompt. They
+need no configuration, which is why read mode is the first run.
 
 ---
 
 ## 3. Architecture: two plug points
 
-The universality question resolves into two independent interfaces. Build both from day one; add implementations on demand.
+Both are designed for extension because more implementations are known to be
+coming. Everything else in the codebase starts concrete.
 
-### Agent adapters — *where the data lives*
+### Agent adapters: where the data comes from
 
-Each agent stores its history differently. An adapter discovers, parses, and normalizes into Thermal's internal shape.
-
-| Adapter | Source | Priority |
+| Adapter | Source | Status |
 |---|---|---|
-| Claude Code | `~/.claude/projects/**/*.jsonl` | **v0** |
-| Live proxy | HTTP interception (any agent with a configurable base URL) | v1 |
-| Codex CLI | TBD — inspect on disk | v2 |
-| Cursor | TBD — inspect on disk | v2 |
-| Aider / OpenCode / others | Community contributions | v2 |
+| Live proxy | HTTP forwarding from any client with a configurable base URL | **Built.** Primary |
+| Claude Code | `~/.claude/projects/**/*.jsonl` | **Built** |
+| Codex CLI | Not yet inspected on disk | Not started |
+| Cursor | Not yet inspected on disk | Not started |
 
-### Provider analyzers — *what the cache rules are*
+### Provider analyzers: what the cache rules are
 
-Caching semantics differ per provider. The detectors are provider-specific even when the transport is shared.
-
-| Provider | Cache model | Priority |
+| Provider | Cache model | Status |
 |---|---|---|
-| Anthropic | Explicit opt-in `cache_control` breakpoints, max 4, minimum prefix length | **v0** |
-| OpenAI | Automatic prefix caching, no breakpoints | v2 |
-| Google | Implicit + explicit context caching | v3 |
+| Anthropic | Explicit `cache_control` breakpoints, max 4, model-dependent minimum prefix | **Built.** Proxy path tested against fixtures and a stub only (section 9) |
+| OpenAI | Automatic prefix caching from 1024 tokens, `cached_tokens` on every response | **Built.** Validated against live traffic |
+| Google | Implicit and explicit context caching | Not started |
 
-**Anthropic first** — explicit breakpoints mean more ways to get it wrong, which means more for a linter to find.
+The two built analyzers must not be collapsed into one:
+
+- **Anthropic** caches on explicit breakpoints, keyed on the whole prefix up to
+  each one. A change after the last breakpoint costs nothing. A change before it
+  loses everything back to the previous breakpoint, or to byte 0 if there is
+  none. A request with no breakpoint cannot have a cache break. A top-level
+  `cache_control` (automatic caching) is a breakpoint on the last block that
+  never appears in the request's content, and it takes one of the four slots.
+  Only a text diff shows where a break happened.
+- **OpenAI** caches automatically and reports `cached_tokens` on every
+  response. That is ground truth, so the text diff is not run for OpenAI and the
+  breakpoint detectors are gated off. Chat Completions sends the system prompt
+  as leading messages; the X-ray shows it as the system segment.
 
 ### Pipeline
 
 ```
-discover → parse (incremental) → normalize → detect → price → render
+read mode:   discover -> parse -> detect -> price -> render
+proxy mode:  forward -> (after response) render prefix -> diff -> read usage -> price -> render
 ```
 
 ---
 
 ## 4. Detectors
 
-The heart of the product. **Detectors are named, never numbered.** A sparse hand-kept numbering (D1, D3, D9) tells a reader nothing and leaks an internal index into user-facing output; a slug is self-documenting and survives reordering. The name is the stable identifier users search, suppress and cite.
+**Detectors are named, never numbered.** A slug is the stable identifier users
+search, suppress and cite; a sparse numbering leaks an internal index into
+output.
 
-**Every detector must output: what, where, why it costs, how much in dollars, and the exact fix.** A finding without a dollar amount and a fix is noise and does not ship.
+**Every finding states what happened, what it cost in dollars, and the fix.** A
+finding that loses no cached tokens has no dollar figure to state, and says
+nothing rather than a misleading $0. A model missing from the price table
+produces no figure either. Both cases are listed below; any other finding
+without a dollar amount is a bug.
 
-### Cache correctness
+### Built
 
-| Detector | Detects | Why it costs | Fix |
+| Detector | Mode | Detects | Dollar figure |
 |---|---|---|---|
-| `cache-never-read` | Cache never warms — `cache_read_input_tokens` is 0 across N consecutive calls | Paying full price every single call | Point to the first divergent byte (`prefix-invalidated`) |
-| `prefix-below-minimum` | Prefix below minimum cacheable length (512–4096 tokens, model-dependent) | `cache_control` set but silently does nothing — no error is ever raised | Move more stable content before the breakpoint, or drop the breakpoint |
-| `prefix-invalidated` | Volatile content before the last breakpoint — timestamps, UUIDs, random IDs, counters | Invalidates the entire prefix on every call | Show the exact diverging substring and its position |
-| `tool-set-changed` | Tool set changed between calls | Tools render first, so any change invalidates everything after | Freeze the tool list; sort deterministically |
-| `nondeterministic-tool-json` | Non-deterministic JSON key order in tool definitions | Different byte sequence each call despite identical semantics | Sort keys before serializing |
-| `too-many-breakpoints` | More than 4 cache breakpoints | Hard API cap; extras are rejected or ignored | Consolidate to the 4 highest-value boundaries |
-| `breakpoint-after-volatile` | `cache_control` placed after volatile content | Breakpoint covers nothing stable | Move the breakpoint earlier |
-| `system-prompt-churn` | System prompt churn within a session | Full prefix invalidation per call | Diff the system prompts, highlight the delta |
-| `ttl-premium-wasted` | TTL mismatch — paid the 1h cache-write premium, never reused within the hour | Pure waste; 1h writes cost more than 5m | Switch to 5m TTL for this workload |
-| `model-switched` | Model switched mid-session | Caches are model-scoped — a switch discards the whole cache | Pin the model, or accept and surface the cost |
-| `effort-changed` | Effort level changed mid-conversation | Invalidates the messages cache | Use a per-message effort system message where supported |
-| `history-edited` | History edited (non-append-only mutation) | Rewriting earlier turns invalidates everything downstream | Make the harness append-only |
+| `prefix-invalidated` | both | A warm cache went cold. In proxy mode, with the segment, byte offset and the bytes before and after | Proxy: tokens rewritten, from the response's `cache_creation_input_tokens` (byte estimate until the response arrives) |
+| `ttl-premium-wasted` | read | 1-hour cache writes followed by another request inside five minutes, where a 5m entry would have stayed warm | The 1h-over-5m write premium |
+| `cache-never-read` | read | A session that wrote a cache and never read it | The write premium |
+| `caching-net-negative` | read | A session whose cache reads saved less than its writes cost | Writes minus read savings |
+| `tool-set-changed` | proxy | The tool list changed mid-conversation | The prefix it broke, priced as `prefix-invalidated`. No figure when nothing was cached |
+| `nondeterministic-tool-json` | proxy | The same tools serialised with a different key order | As `tool-set-changed` |
+| `cacheable-prefix-uncached` | proxy | A large tools-and-system head resent with no breakpoint (Anthropic) | Input price paid on each repeat inside five minutes, less the write premium caching would add; grows with every repeat |
+| `automatic-cache-not-landing` | proxy | Three large prompts in a row reporting `cached_tokens: 0` after a hit (OpenAI) | The tokens the last hit read, at input price instead of cached price, for every miss in the run. No figure when no hit was seen |
+| `too-many-breakpoints` | proxy | More than four `cache_control` markers (Anthropic) | None: loses no cached tokens |
+| `prefix-below-minimum` | proxy | Caching requested on a prefix below the model's minimum (Anthropic) | None: the provider writes nothing and charges no premium |
 
-### Waste and bloat
+A tool change that breaks a cached prefix is reported once, as the tool
+finding. A second `prefix-invalidated` for the same bytes would count the money
+twice.
 
-| Detector | Detects | Why it costs | Fix |
-|---|---|---|---|
-| `caching-net-negative` | Cache-write cost exceeds read savings | Writing a cache nobody reuses is strictly worse than not caching | Remove the breakpoint |
-| `tool-definition-bloat` | Tool-definition bloat — tokens spent on schemas vs. actual call frequency | "You define 40 tools; 3 are ever called; the other 37 cost $X/month" | Trim, or use deferred tool loading |
-| `duplicate-context` | Duplicate content — same file read into context multiple times | Paying repeatedly for identical bytes | Show all occurrences |
-| `retry-storm` | Retry storms — the same request repeated in quick succession | Multiplied cost, often invisible | Surface the pattern |
-| `context-growth-unbounded` | Runaway context growth — sessions where context balloons without compaction | Every subsequent turn gets more expensive | Recommend compaction or context editing |
-| `expensive-outliers` | Most expensive individual requests (long tail) | A handful of calls often dominate a bill | Rank, with drill-down |
+### Not built
 
-### Detector output contract
+| Detector | Detects | Notes |
+|---|---|---|
+| `model-switched` | Model changed mid-session; caches are model-scoped | `diagnostics.cache_miss_reason` in Claude Code logs already carries `model_changed` on about 1% of turns |
+| `effort-changed` | Effort changed mid-conversation, invalidating the messages cache | |
+| `history-edited` | An earlier turn rewritten rather than appended | Partly covered: `prefix-invalidated` reports it in the messages segment |
+| `system-prompt-churn` | The system prompt changes within a session | Overlaps `prefix-invalidated`; may not earn a separate finding |
+| `breakpoint-after-volatile` | A breakpoint placed after content that changes every call | Overlaps `prefix-invalidated` |
+| `tool-definition-bloat` | Tool schemas that cost tokens on every call and are rarely used | Needs tool-call counts the proxy does not yet keep |
+| `duplicate-context` | The same content read into context more than once | |
+| `retry-storm` | The same request repeated in quick succession | |
+| `context-growth-unbounded` | Context grows without compaction | |
+| `expensive-outliers` | The few requests that dominate spend | |
+
+### Output contract
+
+Read mode (`src/types.ts`):
 
 ```ts
 interface Finding {
-  id: string                 // "prefix-invalidated"
-  severity: "critical" | "warning" | "info"
-  title: string              // human, specific
+  id: string                  // "ttl-premium-wasted"
+  severity: 'critical' | 'warning' | 'info'
+  title: string
   wastedTokens: number
-  wastedUSD: number          // required — no finding ships without this
+  wastedUSD: number
   occurrences: number
-  location: { sessionId, turnIndex, project, filePath, lineNumber }
-  evidence: { before: string, after: string, divergenceOffset: number }
-  fix: { description: string, snippet?: string, docsUrl?: string }
+  detail: string
+  fix: string
+  sites: { turn: Turn; wastedUSD: number }[]   // where the waste fell, for the timeline
+}
+```
+
+Proxy mode (`src/proxy/capture.ts`):
+
+```ts
+interface LiveFinding {
+  id: string
+  title: string
+  detail: string              // for a break, includes the bytes before and after
+  fix: string                 // names where the changing part should go, not just what to remove
+  wastedUSD: number | null    // null only in the cases listed above
+  at: Date
+  exchange: number            // the request that triggered it, for the X-ray
 }
 ```
 
@@ -139,241 +196,240 @@ interface Finding {
 
 ## 5. Cost model
 
-- Per-model pricing table: input, output, cache-write-5m, cache-write-1h, cache-read.
-- **Ships as editable config**, not hardcoded — prices change and a stale table destroys trust.
-- Warn when a session uses a model missing from the table rather than silently reporting $0.
-- Three numbers computed per scope: **actual spend**, **theoretical minimum** (perfect caching), **waste** (the delta).
-- **Waste is the headline number.** Everything else supports it.
+- Per-model list prices in `src/pricing.ts`: input, output and cache read, per
+  million tokens. Anthropic cache writes use the published multipliers (1.25x
+  input for 5m, 2x for 1h); these have not been checked against an invoice.
+  OpenAI charges nothing extra to write its cache.
+- A model missing from the table is named in the report and excluded from
+  totals, never priced at $0.
+- Waste is measured against what was **recoverable**, not a theoretical floor.
+  An early version compared spend with perfect caching and overclaimed 13x.
+- A rebuilt prefix is priced at the 5m write rate, the cheaper of the two, so a
+  break is never overstated.
+- Proxy figures start as a byte-based estimate (four characters per token) and
+  are replaced by the provider's counts when the response arrives.
+- For Claude Code on a subscription, every figure is notional: what the same
+  traffic would cost at API rates.
+
+Open: the table is bundled source, not editable config, and nothing warns when
+it is stale (section 11).
 
 ---
 
 ## 6. Interface
 
-### First run — the most important 60 seconds
+### CLI
 
-```
-$ npx thermal
-```
+| Command | Purpose | Status |
+|---|---|---|
+| `thermal` | Read mode: terminal report, then the dashboard on 127.0.0.1:7870 | Built |
+| `thermal --report` | Terminal report only; also the behaviour when output is piped | Built |
+| `thermal --since <days>` | Time window | Built |
+| `thermal --project <name>` | Projects whose name contains this | Built |
+| `thermal --root <path>` | Another session directory | Built |
+| `thermal --redact` | Project names and paths replaced, for shareable screenshots | Built |
+| `thermal proxy` | Proxy on 127.0.0.1:7878, live view at `/_thermal/`, summary on Ctrl-C | Built |
+| `thermal proxy --upstream <url>` | Another provider, for example `https://api.openai.com` | Built |
+| `thermal --json` | Machine-readable output | Not built |
+| `thermal watch` | Tail session logs while working | Not built |
 
-1. No flags, no config, no API key.
-2. Auto-discovers sessions. Shows a real progress bar (180+ files / 200MB is normal).
-3. Prints a terminal summary immediately — value before the browser opens.
-4. Opens the dashboard automatically.
-5. If nothing is found: clear, friendly guidance on supported agents. Never a stack trace.
-
-The headline, stated in one line:
-
-> **You wasted $47.20 (31% of spend) on cache misses in the last 30 days.**
-
-Specific, personal, emotional, screenshot-ready. This line is the product's marketing.
+The terminal report must stand on its own. Many users never open the browser,
+and the terminal view is the one pasted into chats. It wraps to the terminal
+width.
 
 ### Views
 
-**1. Overview** — headline waste number, spend over time, waste by project, findings ranked by dollar impact.
+Built, in the read-mode dashboard:
 
-**2. Context X-ray** *(the signature view)* — a single request as one horizontal bar, segmented in true render order (`tools` → `system` → `messages`), each segment sized by token count and colored by heat (hot = cached and cheap, cold = recomputed and expensive), labeled with its dollar cost. This is the screenshot people post.
+- **Overview**: headline waste, spend by day, findings ranked by dollars,
+  sessions with the most waste.
+- **Findings**, **Sessions**, **Projects**: sortable tables, scoped by project
+  and time window.
+- **Session timeline**: turns with a cache-state ribbon, the turns a finding
+  blames, and Anthropic's `cache_miss_reason` where present.
 
-**3. Session timeline** — a session as a sequence of turns, with a cache-hit ribbon across the top. The exact turn where the cache broke gets a marker and an annotation. Click to open the diff.
+Built, in the proxy's live view:
 
-**4. The diff** *(the money shot)* — side-by-side prefix comparison between turn N and N+1, with the first divergent byte highlighted and everything downstream shaded as invalidated. Caption: *"This character cost you $12.40."*
+- **Context X-ray**: one request as a bar in render order (tools, system,
+  messages), sized by length, marking the last breakpoint and where the prefix
+  changed.
+- **The diff**: the bytes before and after the first divergence, trimmed to
+  word boundaries.
+- **Requests** and **Findings**: newest first, each finding linked to its
+  request.
 
-**5. Findings** — every detector hit, sorted by dollars, each with its fix. Filterable by severity and project.
+Not built: tool inventory, shareable PNG summary card.
 
-**6. Tool inventory** — every tool definition, its token cost, call frequency, and cost-per-actual-use. Sortable. Immediately actionable.
-
-**7. Projects** — comparison across your repos. Which codebase is expensive, and why.
-
-### CLI surface
-
-| Command | Purpose |
-|---|---|
-| `npx thermal` | Analyze + open dashboard |
-| `npx thermal --report` | Terminal summary only, no browser |
-| `npx thermal --json` | Machine-readable output for scripting |
-| `npx thermal --since 7d` | Time window |
-| `npx thermal --project <name>` | Scope to one project |
-| `npx thermal watch` | Live tail while you work |
-| `npx thermal proxy` | Live proxy mode (v1) |
-| `npx thermal --redact` | Content-stripped output, safe to share |
-
-Terminal output must be genuinely well-designed — sparklines, colour, a clean summary table. Many users will never open the browser, and the terminal view is the one that gets pasted into chats.
+Every read-mode view has a URL. Both modes take `j`/`k`, `Enter` and `?` for
+help; read mode adds `/` to search and `1`-`4` for views.
 
 ---
 
 ## 7. UX principles
 
-These are requirements, not aspirations. They are the actual differentiator; the analysis logic is replicable, the taste is not.
-
 1. **Zero configuration for first value.** Config exists only to go deeper.
-2. **Every finding carries a dollar amount.** No exceptions.
-3. **Every finding carries a fix.** Copy-pasteable where possible. A diagnosis without a remedy is a complaint.
-4. **Nothing leaves the machine.** No telemetry, no account, no upload — stated prominently in the README and the UI footer. Non-negotiable for a tool reading logs that sit next to source code.
-5. **Fast.** Hundreds of files must parse in seconds. Incremental cache keyed on file mtime + byte offset; only new lines are ever re-read.
-6. **Beautiful in both themes.** Dark mode is not an afterthought. This is the moat — nearly every tool in this space is ugly.
-7. **Designed empty, loading, and error states.** Most tools treat these as afterthoughts; they are the first thing new users see.
-8. **Shareable export.** Generate a summary card (PNG) with content redacted and numbers intact. This is the viral loop — people post their waste stats.
-9. **Deep links.** Every view has a URL worth sending to a teammate.
-10. **Keyboard navigable.** `j`/`k`, `/` to search, `?` for help.
-11. **Honest about uncertainty.** Where a number is estimated, say so. Never present an inference as a measurement.
+2. **Every finding carries a dollar amount**, with the exceptions in section 4
+   stated rather than hidden.
+3. **Every finding carries a fix that names a destination.** "Move the timestamp
+   out of the system prompt" sent people to the first message, which breaks a
+   cached history just the same. Say where it goes.
+4. **Nothing leaves the machine.** No telemetry, no account, no upload. The
+   proxy forwards only to the configured upstream origin; a request path can
+   never redirect it to another host.
+5. **The proxy is invisible.** Responses stream straight through; analysis runs
+   after the client has its bytes.
+6. **Fast.** 155 sessions and 38K requests parse in 1.0s.
+7. **Dark surface only, validated.** Colours pass the dataviz validator
+   (`DESIGN.md`). A light theme would be separately stepped and validated, never
+   inverted.
+8. **Designed empty, loading and error states.**
+9. **Honest about uncertainty.** An estimate is marked as one (`~$`). A summary
+   always says whether usage was read at all, because a clean report that
+   measured nothing looks exactly like a healthy one.
 
 ---
 
 ## 8. Non-goals
 
-Scope discipline. Each of these is a real temptation and each would sink the project.
-
-- **Not an observability platform.** No server, no account, no cloud, no dashboard-as-a-service.
-- **Not a team cost tool.** One developer, one machine. Multi-user is a different product.
-- **Not a production proxy.** The proxy is a debugging aid, never in a serving path.
-- **Not an optimizer.** Thermal diagnoses; it does not rewrite your prompts.
-- **Not a general LLM tracer.** Langfuse and Phoenix own that. Thermal does one thing.
-- **No TLS interception.** Base-URL redirection and local files only. MITM certificates are terrible UX and a security smell.
+- **Not an observability platform.** No server, no account, no cloud.
+- **Not a team cost tool.** One developer, one machine.
+- **Not a production proxy.** A debugging aid, never in a serving path.
+- **Not an optimizer.** Thermal diagnoses; it does not rewrite prompts.
+- **Not a general LLM tracer.** Langfuse and Phoenix own that.
+- **No TLS interception.** Base-URL redirection and local files only.
 - **No telemetry.** Ever.
 
 ---
 
-## 9. Build order
+## 9. Build order and evidence
 
-### v0 — prove it — DONE, and it changed the plan
+### v0: read mode, and the gate it failed
 
-Built and run against 177 real sessions (40K requests, 0.8s). Result:
+The founding premise was that people lose money to broken caches. Measured on
+one machine's Claude Code history on 2026-09-28:
 
 ```
-$8263.79 at API rates       notional - a subscription is billed differently
-$640.72 attributable waste  7.8% of the above
-98.0% cache hit rate
-
-ttl-premium-wasted   $611.06  27741 writes
-prefix-invalidated    $29.65     19 occurrences
+155 sessions · 38K requests · parsed in 1.0s
+98.1% cache hit rate
+$742.61 attributable waste on $8,627.77 notional (8.6%)
+cache-never-read and caching-net-negative find nothing
 ```
 
-`cache-never-read` and `caching-net-negative` found nothing at all.
+The corpus changes daily (new sessions arrive, old ones age out), so absolute
+figures drift. The shape is what matters: Claude Code's caching works, and its
+one large finding, the 1h TTL, is Claude Code's choice rather than the user's.
+A read-mode tool can show a Claude Code user their waste and offer no action.
 
-**What the gate says.** The founding premise was wrong. Claude Code's caching is
-already working — 98% hit rate — so there is no broken-cache epidemic to expose.
-Worse, the one large finding is not the user's to fix: Claude Code chooses the
-1-hour TTL, not the person running it. A read-mode tool can show a Claude Code
-user their waste and offer them no action.
+**The TTL finding stands on its own.** A cache read refreshes the entry's timer
+on either TTL, so requests under five minutes apart keep a 5m entry warm
+indefinitely and the 1h TTL buys nothing but the doubled write price. 30,076 of
+31,163 one-hour writes (96.5%) were followed by another request within two
+minutes; median gap 4.1s, p90 24.7s.
 
-**What survives.** The finding itself is real and verified against Anthropic's
-documentation: a cache read refreshes the entry's timer on either TTL, so
-requests under five minutes apart keep a 5m entry warm indefinitely and the 1h
-TTL "buys nothing there except the doubled write price". On this corpus 27,741
-of 28,735 1-hour writes were followed by another request within two minutes.
-That is worth publishing on its own, separately from any tool.
+**Consequence: proxy mode became the product.** The diagnosis with an action
+attached, naming the byte that broke the prefix, needs the request body. The
+people who can act on it build their own agents.
 
-**Consequence: proxy mode became the product, not a later phase.** The diagnosis
-that has an action attached — naming the byte that broke the prefix — needs the
-request body, which logs do not contain. The people who can act on it are those
-building their own agents, not those running someone else's.
+### v1: proxy mode, Anthropic: built, not proven live
 
-Read mode keeps its place as the zero-configuration first run. It is the hook
-that makes installation free, not the thing that delivers the value.
+Forwarding of JSON and SSE responses is verified byte for byte through a stub.
+The detectors are covered by fixtures. **No request has yet gone through the
+proxy to the live Anthropic API.** Half the detectors are Anthropic-only, so
+this is the largest open risk.
 
-### v1 — proxy mode — DONE
-
-A local forwarding proxy on 127.0.0.1:7878. Point an agent at it with
-`ANTHROPIC_BASE_URL` and it passes every request through untouched, then diffs
-the prefix after the response has already been delivered.
-
-Verified end to end against a stub upstream: JSON and SSE streaming both survive
-the round trip byte for byte, and a timestamp planted in a system prompt is
-caught with its offset and the before/after bytes.
-
-Detectors this unlocked, all of which need the request body:
-
-| Detector | Detects |
-|---|---|
-| `prefix-invalidated` | upgraded - now names the segment and byte offset, with context |
-| `tool-set-changed` | the tool list changed mid-conversation |
-| `nondeterministic-tool-json` | identical tools serialised into different bytes |
-| `too-many-breakpoints` | more than four `cache_control` markers |
-| `prefix-below-minimum` | caching requested on a prefix too short to cache |
-
-Two design notes worth keeping:
+Design notes worth keeping:
 
 - **Arrays render as concatenated elements, not JSON arrays.** Serialising
   `messages` with `JSON.stringify` makes every append look like a divergence,
-  because the closing bracket moves. The prefix is a byte sequence that grows.
-- **Non-determinism is a comparison between requests, never a property of one.**
-  An unusual key order caches perfectly well as long as it is stable; the fault
-  is the same tools producing different bytes twice.
+  because the closing bracket moves.
+- **Non-determinism is a comparison between requests, never a property of
+  one.** An unusual key order caches perfectly well if it is stable.
+- **Only bytes before the last breakpoint are cached.** A changed user question
+  after it is supposed to change; reporting it flagged every healthy request.
+- **Model the provider's cache unit, not the diff.** A change loses everything
+  back to the last breakpoint before it, not merely the bytes after the change.
+  Pricing only the latter understated a break about 150x.
+- **A conversation is followed by its history, not only its first message.** A
+  timestamp moved into the first message made every request look new, so a
+  cached history broke on every call unseen.
 
-Still to do: `system-prompt-churn` and `breakpoint-after-volatile` overlap
-heavily with `prefix-invalidated` and may not earn separate findings.
-`tool-definition-bloat` needs response data the proxy does not yet retain.
+### v1.1: OpenAI, validated live
 
-### v1.1 — OpenAI support, validated live — DONE
-
-Run live against OpenAI through the proxy using a production security
-scan prompt (~3,290 tokens) and a real key. Ground truth came from the API's own
-`prompt_tokens_details.cached_tokens`:
+Run through the proxy against a production security-scan prompt of about 3,290
+tokens, with ground truth from `cached_tokens`:
 
 ```
 stable system prompt, only the question changes   3200 / 3290 cached  -> 0 findings
 a clock at the START of the system prompt            0 / 3310 cached  -> 1 finding
 ```
 
-**Providers differ in where the truth lives.** Anthropic caches on explicit
-`cache_control` breakpoints, so a text diff of the prefix is the only way to see
-a break. OpenAI caches automatically and reports `cached_tokens` on every
-response - that is ground truth and beats anything inferred from diffing, so the
-text diff is not run for OpenAI at all.
+Live traffic also caught a false positive no fixture had: a cold first call
+plus one of OpenAI's best-effort misses counted as a failing run. The detector
+now skips the first large prompt, resets on any hit, and ignores prompts under
+1024 tokens.
 
-**The live run caught a false positive that unit tests could not.** The diff was
-comparing the whole request, so a changed user question - which is supposed to
-change on every call - was reported as a cache break on requests that were in
-fact caching 97% of their tokens. Only bytes before the last breakpoint are
-cached; a divergence after it costs nothing. Two consequences now enforced by
-regression tests:
+### v2: dashboard and live view: built
 
-- A change after the last breakpoint is never a break.
-- A request with no `cache_control` at all cannot have a cache break. Nothing was
-  cached, so nothing was lost - `cacheable-prefix-uncached` covers that case.
+Read-mode dashboard and proxy live view as described in section 6, with no
+runtime dependencies. Rendered and audited at 1280 and 1920 wide. `--redact`
+built for public screenshots.
 
-### v2 — the dashboard
-Overview, Context X-ray, Timeline, Diff, Findings, Tools. Shareable export.
-`--redact`.
+### Next, in order
 
-### v3 — breadth
-OpenAI analyzer · Codex and Cursor adapters · watch mode · plugin API.
+1. **Validate the Anthropic proxy path against the live API.** Blocked on a
+   working key.
+2. **Publish to npm** as `thermal-cache` (`thermal` is taken; the command is
+   still `thermal`).
+3. **More detectors**, starting with `model-switched`, which Anthropic's
+   `cache_miss_reason` provides almost for free.
+4. Codex and Cursor adapters, once their on-disk formats are inspected.
 
-**Free from the logs already:** `diagnostics.cache_miss_reason` carries
-Anthropic's own attribution (`model_changed`, `messages_changed`,
-`previous_message_not_found`) on roughly 1% of turns — `model-switched` arrives
-without being written.
+### Unused signals worth a detector
+
+`prompt_cache_key` and `input_tokens_details.cache_write_tokens` on the OpenAI
+Responses API. `diagnostics.cache_miss_reason` on Anthropic responses
+(`model_changed`, `messages_changed`, `previous_message_not_found`).
+
+---
 
 ## 10. Technical decisions
 
 | Decision | Choice | Rationale |
 |---|---|---|
-| Language | TypeScript | Dashboard is TS regardless; one language for the stack |
-| Runtime | Node 20+ | `npx` works universally; develop on Bun if preferred |
-| Distribution | npm / `npx` | Zero-install is the single biggest adoption lever |
-| Storage | SQLite (local) | Local-first; no server |
-| Token counting (Claude) | `/v1/messages/count_tokens` | Claude's tokenizer is not tiktoken; local counting is wrong |
-| Token counting (OpenAI) | `gpt-tokenizer` | Pure TS, fastest on npm, no native deps |
-| Analysis timing | Off the hot path | In proxy mode: forward first, analyze after. Adds ~1ms |
-| Frontend | TBD — keep it light | Dependencies are a liability in a tool people `npx` |
+| Language | TypeScript | One language for CLI, proxy and browser code |
+| Runtime | Node 20+ | `npx` works everywhere; the packed tarball is verified on Node 20 |
+| Distribution | npm / `npx` | Zero-install first run |
+| Runtime dependencies | None | Download weight on every first `npx` run |
+| Storage | None; everything in memory | Session logs are re-read in about a second; the proxy keeps the last 200 requests |
+| Token counts | Provider usage fields; four characters per token until a response arrives | No tokenizer dependency, no API call. The provider's count replaces the estimate |
+| Analysis timing | After the response is delivered | The proxy must add no latency |
+| Frontend | Hand-written DOM and SVG, compiled by the same TypeScript | No framework; Iosevka subset at 15 kB per weight |
 
 ---
 
 ## 11. Open questions
 
-1. **Name availability** — is `thermal` free on npm? Fallbacks: `cachelens`, `ember`, `hotpath`.
-2. **Content handling** — session files contain source code. Default to metadata-only parsing? Content is needed for prefix diffing (`prefix-invalidated`), so the answer is probably: parse in memory, never persist raw content.
-3. **Pricing freshness** — bundled table, remote fetch, or both?
-4. **Do the numbers justify the tool?** Unknown until v0 runs. This is the gate.
-5. **Cross-agent adapters** — do Codex and Cursor write comparable telemetry, or only Claude Code?
+1. **Pricing freshness.** Bundled table, editable config, or a warning when a
+   price is old? Today it is bundled source with a read date for the OpenAI
+   rows.
+2. **Content handling.** Request bodies hold source code. Thermal keeps them in
+   memory only and writes nothing to disk; excerpts of the diverging bytes do
+   appear in the live view and terminal.
+3. **Cross-agent adapters.** Do Codex and Cursor write comparable usage
+   telemetry, or only Claude Code?
+4. **Cache write multipliers.** Confirm 1.25x and 2x against a real invoice
+   before quoting a total to anyone.
 
 ---
 
 ## 12. Definition of done for v1
 
-- [ ] `npx thermal` works on a clean machine with zero configuration
-- [ ] Parses all 181 session files in under 10 seconds
-- [ ] Every finding shows a dollar amount and a fix
-- [ ] Dashboard is genuinely beautiful in light and dark
-- [ ] Nothing is transmitted off the machine
-- [ ] README has a GIF showing the X-ray view in the first screenful
-- [ ] The author has personally found and fixed a real cache bug using it
+- [x] `thermal` runs with zero configuration (packed tarball, Node 20)
+- [x] Parses every session file on this machine in under 10 seconds (1.0s)
+- [ ] Every finding shows a dollar amount and a fix, or states why it has none
+      (done for all built detectors; open for each new one)
+- [x] Nothing is transmitted off the machine
+- [ ] Anthropic proxy path validated against the live API
+- [ ] Published to npm
+- [ ] README shows the X-ray view in the first screenful
+- [ ] The author has found and fixed a real cache bug in their own agent with it
