@@ -87,7 +87,7 @@ coming. Everything else in the codebase starts concrete.
 
 | Provider | Cache model | Status |
 |---|---|---|
-| Anthropic | Explicit `cache_control` breakpoints, max 4, model-dependent minimum prefix | **Built.** Proxy path tested against fixtures and a stub only (section 9) |
+| Anthropic | Explicit `cache_control` breakpoints, max 4, model-dependent minimum prefix | **Built.** Validated against live traffic |
 | OpenAI | Automatic prefix caching from 1024 tokens, `cached_tokens` on every response | **Built.** Validated against live traffic |
 | Google | Implicit and explicit context caching | Not started |
 
@@ -330,12 +330,26 @@ minutes; median gap 4.1s, p90 24.7s.
 attached, naming the byte that broke the prefix, needs the request body. The
 people who can act on it build their own agents.
 
-### v1: proxy mode, Anthropic: built, not proven live
+### v1: proxy mode, Anthropic, validated live
 
 Forwarding of JSON and SSE responses is verified byte for byte through a stub.
-The detectors are covered by fixtures. **No request has yet gone through the
-proxy to the live Anthropic API.** Half the detectors are Anthropic-only, so
-this is the largest open risk.
+On 2026-09-28, twelve requests to `claude-sonnet-5` went through the proxy to the
+live API. Thermal's prompt and cached token counts matched the API's usage on
+every one, streamed or not, and each finding was priced from the API's own
+`cache_creation_input_tokens`:
+
+```
+stable prompt, explicit breakpoint        write 3334, then read 3334 twice  -> 0 findings
+timestamp in the cached system prompt     rewrote 3345                      -> prefix-invalidated, $0.0077
+tool list [read] -> [read, write]         rewrote 3726                      -> tool-set-changed, $0.0086
+automatic caching, then system changed    read 3351, then rewrote 3350      -> prefix-invalidated, $0.0077
+3,098-token prompt, no cache_control      full input price twice            -> cacheable-prefix-uncached, $0.0040
+```
+
+Not yet run live: a long multi-turn agent loop, where the breakpoint moves to
+the newest message each turn. There Thermal only knows the current request's
+breakpoints, so a break's description can understate how much was reused; its
+price still comes from the API's written count.
 
 Design notes worth keeping:
 
@@ -376,13 +390,11 @@ built for public screenshots.
 
 ### Next, in order
 
-1. **Validate the Anthropic proxy path against the live API.** Blocked on a
-   working key.
-2. **Publish to npm** as `thermal-cache` (`thermal` is taken; the command is
-   still `thermal`).
-3. **More detectors**, starting with `model-switched`, which Anthropic's
+1. **Run a long multi-turn agent loop live** through the proxy, and track
+   breakpoints written by earlier requests so reuse is described correctly.
+2. **More detectors**, starting with `model-switched`, which Anthropic's
    `cache_miss_reason` provides almost for free.
-4. Codex and Cursor adapters, once their on-disk formats are inspected.
+3. Codex and Cursor adapters, once their on-disk formats are inspected.
 
 ### Unused signals worth a detector
 
@@ -429,7 +441,7 @@ Responses API. `diagnostics.cache_miss_reason` on Anthropic responses
 - [ ] Every finding shows a dollar amount and a fix, or states why it has none
       (done for all built detectors; open for each new one)
 - [x] Nothing is transmitted off the machine
-- [ ] Anthropic proxy path validated against the live API
-- [ ] Published to npm
+- [x] Anthropic proxy path validated against the live API
+- [x] Published to npm (`thermal-cache`)
 - [ ] README shows the X-ray view in the first screenful
 - [ ] The author has found and fixed a real cache bug in their own agent with it

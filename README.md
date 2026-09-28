@@ -141,9 +141,11 @@ truth instead of diffing.
   previous request. OpenAI misses are priced from the tokens the last cache hit
   read. `too-many-breakpoints` and `prefix-below-minimum` carry no dollar
   figure: neither loses tokens that were cached.
-- The OpenAI proxy path has been validated against live traffic. The Anthropic
-  proxy path has been tested against fixtures and a stub server, not yet against
-  the live API.
+- Both proxy paths have been validated against live traffic: OpenAI, and
+  Anthropic on `claude-sonnet-5` with explicit and automatic caching, where
+  Thermal's token counts matched the API's usage on every request. Long
+  multi-turn agent loops, where the breakpoint moves each turn, have not been
+  run live.
 
 ## Development
 
