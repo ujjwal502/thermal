@@ -403,3 +403,26 @@ test('OpenAI misses with no earlier hit are reported without a price', () => {
   assert.ok(finding, 'expected the misses to be reported')
   assert.equal(finding.wastedUSD, null)
 })
+
+test('a large prompt cached with top-level automatic caching is not flagged as uncached', () => {
+  const capture = new Capture()
+  for (let i = 0; i < 3; i++) {
+    capture.observe(request(bigPrompt, { cache_control: { type: 'ephemeral' }, messages: [{ role: 'user', content: `q${i}` }] }))
+  }
+  assert.deepEqual(capture.findings, [])
+})
+
+test('a changed system prompt under automatic caching is reported as a break', () => {
+  const capture = new Capture()
+  const at = (time: string) => ({
+    model: 'claude-sonnet-5',
+    cache_control: { type: 'ephemeral' },
+    system: `${rules}\nCurrent time: ${time}`,
+    messages: [{ role: 'user', content: 'Where is my refund?' }],
+  })
+  capture.observe(at('18:00:51'))
+  capture.observe(at('18:00:53'))
+  const finding = capture.findings.find((f) => f.id === 'prefix-invalidated')
+  assert.ok(finding, 'expected the break to be reported')
+  assert.match(finding.title, /system/)
+})

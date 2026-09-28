@@ -26,6 +26,12 @@ test('render counts cache_control breakpoints wherever they are nested', () => {
   assert.equal(prefix.breakpoints, 2)
 })
 
+test('top-level automatic caching counts as a breakpoint at the end of the prompt', () => {
+  const prefix = render(body({ system: 'You are helpful.', cache_control: { type: 'ephemeral' } }))
+  assert.equal(prefix.breakpoints, 1)
+  assert.equal(prefix.cacheEndsAt, prefix.text.length)
+})
+
 test('identical requests do not diverge', () => {
   assert.equal(firstDivergence(render(body()), render(body())), undefined)
 })

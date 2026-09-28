@@ -46,6 +46,8 @@ export interface RequestBody {
   /** Responses API spellings of system and messages. */
   instructions?: unknown
   input?: unknown
+  /** Anthropic's automatic caching: one breakpoint the API places itself. */
+  cache_control?: unknown
 }
 
 /** Stable serialisation: object keys are emitted in sorted order so that a
@@ -126,10 +128,16 @@ export function render(body: RequestBody, provider: Provider = 'anthropic'): Ren
   for (let at = text.indexOf('"cache_control"'); at !== -1; at = text.indexOf('"cache_control"', at + 1)) {
     breakpointsAt.push(at)
   }
+  // A top-level cache_control never appears in the rendered bytes: the API
+  // puts the breakpoint on the last block itself, and it takes one of the four
+  // slots. Missing it read automatic caching as no caching at all.
+  const automatic = body.cache_control === undefined ? 0 : 1
+  if (automatic) breakpointsAt.push(text.length)
   return {
     text,
     segments,
-    breakpoints: countBreakpoints(body.tools) + countBreakpoints(body.system) + countBreakpoints(body.messages),
+    breakpoints:
+      automatic + countBreakpoints(body.tools) + countBreakpoints(body.system) + countBreakpoints(body.messages),
     toolNames: toolNamesOf(body.tools),
     cacheEndsAt: breakpointsAt.at(-1),
     breakpointsAt,
