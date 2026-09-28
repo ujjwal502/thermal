@@ -3,6 +3,10 @@ import type { Provider } from './prefix.ts'
 export interface ObservedUsage {
   promptTokens: number
   cachedTokens: number
+  /** Anthropic's cache_creation_input_tokens: the provider's own count of what
+   *  this request wrote to the cache. Absent when the response does not carry
+   *  it, which must not be read as nothing written. */
+  writtenTokens?: number
 }
 
 interface AnthropicUsage {
@@ -27,9 +31,11 @@ const num = (value: unknown): number =>
 
 function fromAnthropic(usage: AnthropicUsage): ObservedUsage {
   const cached = num(usage.cache_read_input_tokens)
+  const written = usage.cache_creation_input_tokens
   return {
-    promptTokens: num(usage.input_tokens) + cached + num(usage.cache_creation_input_tokens),
+    promptTokens: num(usage.input_tokens) + cached + num(written),
     cachedTokens: cached,
+    ...(typeof written === 'number' && Number.isFinite(written) ? { writtenTokens: written } : {}),
   }
 }
 

@@ -136,6 +136,11 @@ truth instead of diffing.
   5-minute TTL, 2x for 1-hour). They have not been checked against an invoice.
 - For Claude Code on a subscription, costs are notional: what the same traffic
   would cost at API rates.
+- In proxy mode, an Anthropic prefix break is priced from the response's
+  `cache_creation_input_tokens`, which includes the turn appended since the
+  previous request. OpenAI misses are priced from the tokens the last cache hit
+  read. `too-many-breakpoints` and `prefix-below-minimum` carry no dollar
+  figure: neither loses tokens that were cached.
 - The OpenAI proxy path has been validated against live traffic. The Anthropic
   proxy path has been tested against fixtures and a stub server, not yet against
   the live API.

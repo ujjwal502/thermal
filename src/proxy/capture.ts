@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import type { Divergence, Provider, RenderedPrefix, RequestBody, SegmentName } from './prefix.ts'
 import { continues, conversationKey, firstDivergence, render, toolSerialisationChanged } from './prefix.ts'
-import { readSavings, rebuildCost } from '../pricing.ts'
+import { rebuildCost, uncachedCost } from '../pricing.ts'
 import type { ObservedUsage } from './usage.ts'
 import type { Exchange, Live } from '../dashboard/contract.ts'
 
@@ -11,7 +11,9 @@ export interface LiveFinding {
   detail: string
   fix: string
   /** Estimated from bytes, and from the provider's token counts once the
-   *  response arrives. Null where Thermal cannot price the finding. */
+   *  response arrives. Null for a model with no known price, and for findings
+   *  that lose no cached tokens: a prefix below the minimum is never written,
+   *  and a breakpoint over the limit costs nothing Thermal can measure. */
   wastedUSD: number | null
   at: Date
   /** The exchange that triggered it, so the live view can show its prefix. */
@@ -22,6 +24,24 @@ interface Seen {
   body: RequestBody
   prefix: RenderedPrefix
 }
+
+/** A tools-and-system head sent with no breakpoint. Its finding's cost grows
+ *  with every repeat that a 5m cache entry would still have served. */
+interface Head {
+  sightings: number
+  lastAt: number
+  warmRepeats: number
+  chars: number
+  tokens: number
+  model: string
+  finding?: LiveFinding
+}
+
+/** Findings that report a broken Anthropic prefix. A tool change breaks it in
+ *  the tools segment, and its own finding carries the cost there. */
+const BREAKS = new Set(['prefix-invalidated', 'tool-set-changed', 'nondeterministic-tool-json'])
+
+const TTL_5M_MS = 5 * 60 * 1000
 
 /** Where the changing part belongs, per segment. The destination has to be
  *  named: "move it out of the system prompt" alone sent people to the start of
@@ -83,10 +103,15 @@ export class Capture {
   readonly findings: LiveFinding[] = []
   #previous = new Map<string, Seen>()
   #recent: Seen[] = []
-  #heads = new Map<string, number>()
-  #uncachedReported = new Set<string>()
+  #heads = new Map<string, Head>()
+  #headOf = new WeakMap<Exchange, Head>()
   #openAiMissStreak = 0
   #openAiSawLargePrompt = false
+  /** Tokens the last OpenAI hit served from cache: the evidence of how much a
+   *  miss after it could have read. */
+  #openAiLastCached = 0
+  #openAiStreakLost = 0
+  #openAiStreakFinding: LiveFinding | undefined
   #requests = 0
   #exchanges: Exchange[] = []
   /** Totals across every provider, so the summary can distinguish "measured and
@@ -146,33 +171,41 @@ export class Capture {
 
     if (!previous) return exchange
 
+    // OpenAI reports cached_tokens directly, which is ground truth and beats
+    // anything inferred from diffing text. Only Anthropic needs the diff.
+    const divergence = provider === 'anthropic' ? firstDivergence(previous.prefix, prefix) : undefined
+    if (divergence) exchange.divergence = divergence
+    // Without a cached prefix to lose, a tool change costs nothing measurable.
+    const toolBreakCost = divergence ? this.#breakCost(divergence, prefix, exchange) : null
+    let toolChangeReported = false
+
     if (toolSerialisationChanged(previous.body, body)) {
+      toolChangeReported = true
       this.#record(exchange, {
         id: 'nondeterministic-tool-json',
         title: 'Identical tools serialised into different bytes',
         detail: 'The tool definitions mean the same thing but their JSON key order changed between requests. Tools render first, so this invalidates the entire prefix.',
         fix: 'Sort object keys before serialising your tool definitions.',
+        wastedUSD: toolBreakCost,
       })
     }
 
     const previousNames = previous.prefix.toolNames.join(',')
     if (previousNames !== prefix.toolNames.join(',')) {
+      toolChangeReported = true
       this.#record(exchange, {
         id: 'tool-set-changed',
         title: 'Tool list changed mid-conversation',
         detail: `Tools went from [${previousNames}] to [${prefix.toolNames.join(',')}]. Tools render before everything else, so the whole prefix is recomputed.`,
         fix: 'Keep the tool list fixed for the life of a conversation, in a stable order.',
+        wastedUSD: toolBreakCost,
       })
     }
 
-    // OpenAI reports cached_tokens directly, which is ground truth and beats
-    // anything inferred from diffing text. Only Anthropic needs the diff.
-    if (provider === 'anthropic') {
-      const divergence = firstDivergence(previous.prefix, prefix)
-      if (divergence) {
-        exchange.divergence = divergence
-        this.#recordDivergence(divergence, prefix, exchange)
-      }
+    // The tool finding already names this break and carries its cost; a second
+    // finding for the same bytes would count the money twice.
+    if (divergence && !(toolChangeReported && divergence.segment === 'tools')) {
+      this.#recordDivergence(divergence, prefix, exchange)
     }
     return exchange
   }
@@ -183,7 +216,8 @@ export class Capture {
   observeUsage(usage: ObservedUsage, provider: Provider, exchange: Exchange): void {
     exchange.promptTokens = usage.promptTokens
     exchange.cachedTokens = usage.cachedTokens
-    this.#repriceBreak(exchange)
+    this.#repriceBreak(exchange, usage)
+    this.#repriceUncached(exchange)
     if (usage.promptTokens > 0) {
       this.totals.withUsage++
       this.totals.promptTokens += usage.promptTokens
@@ -199,52 +233,107 @@ export class Capture {
     this.#openAiSawLargePrompt = true
     if (usage.cachedTokens > 0) {
       this.#openAiMissStreak = 0
+      this.#openAiLastCached = usage.cachedTokens
+      this.#openAiStreakLost = 0
+      this.#openAiStreakFinding = undefined
       return
     }
     if (first) return
-    if (++this.#openAiMissStreak !== MISSES_BEFORE_REPORTING) return
+    this.#openAiMissStreak++
+    this.#openAiStreakLost += Math.min(this.#openAiLastCached, usage.promptTokens)
 
-    this.#record(exchange, {
+    // Priced from what the last hit actually read, not from the prompt size: a
+    // prompt that never hit gives no evidence of how much of it could cache.
+    const cost = () =>
+      this.#openAiLastCached > 0 ? (rebuildCost(this.#openAiStreakLost, exchange.model) ?? null) : null
+    if (this.#openAiStreakFinding) {
+      this.#openAiStreakFinding.wastedUSD = cost()
+      return
+    }
+    if (this.#openAiMissStreak !== MISSES_BEFORE_REPORTING) return
+
+    this.#openAiStreakFinding = this.#record(exchange, {
       id: 'automatic-cache-not-landing',
       title: `${MISSES_BEFORE_REPORTING} large prompts in a row cached nothing`,
       detail:
         `Prompts of ${usage.promptTokens} tokens are reporting cached_tokens: 0. ` +
         'OpenAI caches long prefixes automatically, so repeated misses mean the start of the prompt is changing between calls.',
       fix: 'Move anything variable - timestamps, ids, retrieved context, the user question - to the END of the prompt, and keep the opening bytes identical.',
+      wastedUSD: cost(),
     })
   }
 
   /** A large stable prompt resent with no breakpoint at all. This is not a
    *  broken cache - it is a cache nobody asked for, and it is invisible because
-   *  nothing fails. Reported once per distinct prompt, on the second sighting. */
+   *  nothing fails. Reported once per distinct prompt, on the first repeat a 5m
+   *  cache would have served; later repeats add to that finding's cost. */
   #checkUncachedRepeat(body: RequestBody, prefix: RenderedPrefix, exchange: Exchange): void {
     if (prefix.breakpoints > 0) return
 
     const key = headKey(prefix)
-    const seen = (this.#heads.get(key) ?? 0) + 1
-    this.#heads.set(key, seen)
-    if (seen < 2 || this.#uncachedReported.has(key)) return
+    const now = Date.now()
+    const chars = headLength(prefix)
+    let head = this.#heads.get(key)
+    if (!head) {
+      head = {
+        sightings: 0,
+        lastAt: now,
+        warmRepeats: 0,
+        chars,
+        tokens: Math.round(chars / CHARS_PER_TOKEN),
+        model: typeof body.model === 'string' ? body.model : 'unknown',
+      }
+      this.#heads.set(key, head)
+    } else if (now - head.lastAt <= TTL_5M_MS) {
+      head.warmRepeats++
+    }
+    head.sightings++
+    head.lastAt = now
+    this.#headOf.set(exchange, head)
 
-    const tokens = Math.round(headLength(prefix) / CHARS_PER_TOKEN)
-    if (tokens < SMALLEST_CACHEABLE_TOKENS) return
+    if (head.finding) {
+      head.finding.wastedUSD = this.#uncachedCost(head)
+      return
+    }
+    if (head.warmRepeats === 0 || head.tokens < SMALLEST_CACHEABLE_TOKENS) return
 
-    this.#uncachedReported.add(key)
-    const model = typeof body.model === 'string' ? body.model : 'claude-opus-5'
-    const perRepeat = readSavings(tokens, model)
-
-    this.#record(exchange, {
+    head.finding = this.#record(exchange, {
       id: 'cacheable-prefix-uncached',
-      title: `A ~${tokens} token prompt is being resent uncached`,
+      title: `A ~${head.tokens} token prompt is being resent uncached`,
       detail:
-        `The same tools and system prompt have now been sent ${seen} times with no cache_control anywhere. ` +
-        `Every repeat pays full input price for bytes the server would otherwise hold. ` +
-        `Roughly $${perRepeat.toFixed(4)} per repeat on ${model}.`,
+        `The same tools and system prompt have now been sent ${head.sightings} times with no cache_control anywhere. ` +
+        'Every repeat pays full input price for bytes the server would otherwise hold.',
       fix: 'Put a cache_control breakpoint at the end of the system prompt. The first call pays a small write premium and every call after it reads at a fraction of input price.',
+      wastedUSD: this.#uncachedCost(head),
     })
   }
 
+  #uncachedCost(head: Head): number | null {
+    return uncachedCost(head.tokens, head.warmRepeats, head.model) ?? null
+  }
+
+  /** The response's prompt size replaces the four-characters-per-token guess
+   *  for the head's share of the prompt. */
+  #repriceUncached(exchange: Exchange): void {
+    const head = this.#headOf.get(exchange)
+    const chars = exchange.segments.reduce((n, segment) => n + segment.chars, 0)
+    if (!head || !exchange.promptTokens || chars === 0) return
+    head.tokens = Math.round((head.chars * exchange.promptTokens) / chars)
+    if (head.finding) head.finding.wastedUSD = this.#uncachedCost(head)
+  }
+
+  /** Bytes from the last usable breakpoint to the last breakpoint: what the
+   *  break made the provider write again. */
+  #lostBytes(divergence: Divergence, prefix: RenderedPrefix): number {
+    return (prefix.cacheEndsAt ?? divergence.offset) - divergence.reusableUntil
+  }
+
+  #breakCost(divergence: Divergence, prefix: RenderedPrefix, exchange: Exchange): number | null {
+    return rebuildCost(this.#lostBytes(divergence, prefix) / CHARS_PER_TOKEN, exchange.model) ?? null
+  }
+
   #recordDivergence(divergence: Divergence, prefix: RenderedPrefix, exchange: Exchange): void {
-    const lost = (prefix.cacheEndsAt ?? divergence.offset) - divergence.reusableUntil
+    const lost = this.#lostBytes(divergence, prefix)
     const reuse =
       divergence.reusableUntil === 0
         ? `The change comes before every cache breakpoint, so none of the cached prefix could be reused: all ${lost} bytes were written again.`
@@ -252,7 +341,7 @@ export class Capture {
     this.#record(exchange, {
       id: 'prefix-invalidated',
       title: `Prefix broke in ${divergence.segment}, ${divergence.offsetInSegment} bytes in`,
-      wastedUSD: rebuildCost(lost / CHARS_PER_TOKEN, exchange.model) ?? null,
+      wastedUSD: this.#breakCost(divergence, prefix, exchange),
       detail:
         `${reuse}\n` +
         `      was: ${visible(divergence.before)}\n` +
@@ -261,20 +350,33 @@ export class Capture {
     })
   }
 
-  /** Once the response reports how many tokens the prompt really was, the
-   *  bytes-to-tokens guess behind a break's cost gives way to that ratio. */
-  #repriceBreak(exchange: Exchange): void {
+  /** Once the response arrives, the bytes-to-tokens guess behind a break's cost
+   *  gives way to the provider's numbers: its own count of tokens written when
+   *  it reports one, otherwise the prompt's real tokens-per-byte ratio. The
+   *  written count also includes the turn appended since the last request,
+   *  which a healthy conversation would have written anyway; that is one turn
+   *  against a whole rewritten prefix. */
+  #repriceBreak(exchange: Exchange, usage: ObservedUsage): void {
     const divergence = exchange.divergence
-    const finding = this.findings.find((f) => f.exchange === exchange.n && f.id === 'prefix-invalidated')
-    if (!divergence || !finding || !exchange.promptTokens || exchange.cacheEndsAt === null) return
-    const chars = exchange.segments.reduce((n, segment) => n + segment.chars, 0)
-    const lostTokens = ((exchange.cacheEndsAt - divergence.reusableUntil) * exchange.promptTokens) / chars
+    const finding = this.findings.find((f) => f.exchange === exchange.n && BREAKS.has(f.id))
+    if (!divergence || !finding || exchange.cacheEndsAt === null) return
+    let lostTokens = usage.writtenTokens
+    if (lostTokens === undefined) {
+      const chars = exchange.segments.reduce((n, segment) => n + segment.chars, 0)
+      if (!usage.promptTokens || chars === 0) return
+      lostTokens = ((exchange.cacheEndsAt - divergence.reusableUntil) * usage.promptTokens) / chars
+    }
     finding.wastedUSD = rebuildCost(lostTokens, exchange.model) ?? null
   }
 
-  #record(exchange: Exchange, finding: Omit<LiveFinding, 'at' | 'exchange' | 'wastedUSD'> & { wastedUSD?: number | null }): void {
+  #record(
+    exchange: Exchange,
+    finding: Omit<LiveFinding, 'at' | 'exchange' | 'wastedUSD'> & { wastedUSD?: number | null },
+  ): LiveFinding {
+    const recorded = { ...finding, wastedUSD: finding.wastedUSD ?? null, at: new Date(), exchange: exchange.n }
     exchange.findings.push(finding.id)
-    this.findings.push({ ...finding, wastedUSD: finding.wastedUSD ?? null, at: new Date(), exchange: exchange.n })
+    this.findings.push(recorded)
+    return recorded
   }
 
   snapshot(upstream: string): Live {

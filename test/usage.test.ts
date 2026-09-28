@@ -16,7 +16,12 @@ test('reads Anthropic usage, summing the three input buckets', () => {
   const body = JSON.stringify({
     usage: { input_tokens: 10, cache_read_input_tokens: 900, cache_creation_input_tokens: 90 },
   })
-  assert.deepEqual(extractUsage(body, 'anthropic'), { promptTokens: 1000, cachedTokens: 900 })
+  assert.deepEqual(extractUsage(body, 'anthropic'), { promptTokens: 1000, cachedTokens: 900, writtenTokens: 90 })
+})
+
+test('an Anthropic response without a cache write count leaves it unknown, not zero', () => {
+  const body = JSON.stringify({ usage: { input_tokens: 10, cache_read_input_tokens: 900 } })
+  assert.equal(extractUsage(body, 'anthropic')?.writtenTokens, undefined)
 })
 
 test('reads usage out of an SSE stream', () => {

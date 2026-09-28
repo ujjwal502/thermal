@@ -1,6 +1,6 @@
 import { strict as assert } from 'node:assert'
 import { createServer, get, type Server } from 'node:http'
-import { after, before, test } from 'node:test'
+import { after, before, mock, test } from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
 import { Capture } from '../src/proxy/capture.ts'
 import { startProxy } from '../src/proxy/server.ts'
@@ -329,5 +329,77 @@ test('a break on a model with no known price has no cost rather than $0', () => 
   capture.observe(at('2'))
   const finding = capture.findings.find((f) => f.id === 'prefix-invalidated')
   assert.ok(finding, 'expected the break to be reported')
+  assert.equal(finding.wastedUSD, null)
+})
+
+test('a prefix break is priced from the tokens the provider says it wrote', () => {
+  const capture = new Capture()
+  const at = (time: string) => ({
+    model: 'claude-sonnet-5',
+    system: [{ type: 'text', text: `${rules}\nCurrent time: ${time}`, cache_control: { type: 'ephemeral' } }],
+    messages: [{ role: 'user', content: 'Where is my refund?' }],
+  })
+  capture.observe(at('18:00:51'))
+  const broken = capture.observe(at('18:00:53'))
+  capture.observeUsage({ promptTokens: 2246, cachedTokens: 0, writtenTokens: 2000 }, 'anthropic', broken)
+
+  // 2000 tokens written at $2.50/M instead of read at $0.20/M.
+  const cost = capture.findings.find((f) => f.id === 'prefix-invalidated')?.wastedUSD
+  assert.ok(cost !== null && cost !== undefined && Math.abs(cost - 0.0046) < 1e-9, `cost was ${cost}`)
+})
+
+test('a tool change that breaks a cached prefix is priced once, on the tool finding', () => {
+  const capture = new Capture()
+  const withTools = (names: string[]) => ({
+    model: 'claude-opus-5',
+    tools: names.map((name) => ({ name, description: name })),
+    system: [{ type: 'text', text: rules, cache_control: { type: 'ephemeral' } }],
+    messages: [{ role: 'user', content: 'hello' }],
+  })
+  capture.observe(withTools(['read']))
+  capture.observe(withTools(['read', 'write']))
+
+  assert.deepEqual(capture.findings.map((f) => f.id), ['tool-set-changed'])
+  assert.ok((capture.findings[0]?.wastedUSD ?? 0) > 0)
+})
+
+test('an uncached prompt costs more with every repeat', () => {
+  const capture = new Capture()
+  const send = (i: number) => capture.observe(request(bigPrompt, { messages: [{ role: 'user', content: `q${i}` }] }))
+  send(0)
+  send(1)
+  const finding = capture.findings.find((f) => f.id === 'cacheable-prefix-uncached')
+  const afterOneRepeat = finding?.wastedUSD ?? 0
+  send(2)
+  send(3)
+  assert.ok(afterOneRepeat > 0, `cost after one repeat was ${afterOneRepeat}`)
+  assert.ok((finding?.wastedUSD ?? 0) > afterOneRepeat * 3)
+})
+
+test('a prompt resent only after a 5m cache would have expired is not flagged', () => {
+  mock.timers.enable({ apis: ['Date'], now: 0 })
+  try {
+    const capture = new Capture()
+    for (let i = 0; i < 3; i++) {
+      capture.observe(request(bigPrompt, { messages: [{ role: 'user', content: `q${i}` }] }))
+      mock.timers.tick(6 * 60 * 1000)
+    }
+    assert.deepEqual(capture.findings, [])
+  } finally {
+    mock.timers.reset()
+  }
+})
+
+test('OpenAI misses are priced from what the last hit read, for as long as they run', () => {
+  const capture = replay([...healthy, ...moving])
+  // Five misses of the 1280 tokens the last hit read, at $0.10/M instead of $0.025/M.
+  const cost = capture.findings.find((f) => f.id === 'automatic-cache-not-landing')?.wastedUSD
+  assert.ok(cost !== null && cost !== undefined && Math.abs(cost - 0.00048) < 1e-9, `cost was ${cost}`)
+})
+
+test('OpenAI misses with no earlier hit are reported without a price', () => {
+  const capture = replay(moving)
+  const finding = capture.findings.find((f) => f.id === 'automatic-cache-not-landing')
+  assert.ok(finding, 'expected the misses to be reported')
   assert.equal(finding.wastedUSD, null)
 })

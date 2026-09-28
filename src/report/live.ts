@@ -61,7 +61,7 @@ export function printSummary(findings: LiveFinding[], requests: number, totals: 
   const priced = findings.filter((finding) => finding.wastedUSD !== null)
   if (priced.length > 0) {
     const total = priced.reduce((usd, finding) => usd + (finding.wastedUSD ?? 0), 0)
-    console.log(`  ${muted('estimated cost of these breaks')}  ${bold(estimate(total))}`)
+    console.log(`  ${muted('estimated waste')}  ${bold(estimate(total))}`)
   }
   console.log('')
 }
