@@ -216,6 +216,7 @@ export class Capture {
   observeUsage(usage: ObservedUsage, provider: Provider, exchange: Exchange): void {
     exchange.promptTokens = usage.promptTokens
     exchange.cachedTokens = usage.cachedTokens
+    this.#withdrawUnbrokenBreak(exchange, usage)
     this.#repriceBreak(exchange, usage)
     this.#repriceUncached(exchange)
     if (usage.promptTokens > 0) {
@@ -348,6 +349,27 @@ export class Capture {
         `      now: ${visible(divergence.after)}`,
       fix: DIVERGENCE_FIX[divergence.segment],
     })
+  }
+
+  /** The diff compares JSON bytes, but the provider caches the prompt it renders
+   *  from them, and the two disagree when only the encoding changed: a
+   *  cache_control marker that moved on to a newer message, or string content
+   *  that became a single text block. Claude Code does both on healthy turns.
+   *  A response that read the cache past the changed byte proves nothing broke
+   *  there, so the finding is withdrawn before it is ever printed. */
+  #withdrawUnbrokenBreak(exchange: Exchange, usage: ObservedUsage): void {
+    const divergence = exchange.divergence
+    const chars = exchange.segments.reduce((n, segment) => n + segment.chars, 0)
+    if (!divergence || !usage.promptTokens || chars === 0) return
+    const tokensBeforeChange = (divergence.offset * usage.promptTokens) / chars
+    if (usage.cachedTokens <= tokensBeforeChange) return
+
+    exchange.divergence = null
+    exchange.findings = exchange.findings.filter((id) => !BREAKS.has(id))
+    for (let i = this.findings.length - 1; i >= 0; i--) {
+      const finding = this.findings[i]
+      if (finding?.exchange === exchange.n && BREAKS.has(finding.id)) this.findings.splice(i, 1)
+    }
   }
 
   /** Once the response arrives, the bytes-to-tokens guess behind a break's cost

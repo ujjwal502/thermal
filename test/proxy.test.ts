@@ -437,3 +437,39 @@ test('with no upstream set, each request goes to the provider its path belongs t
 test('a configured upstream takes every request, whatever its path', () => {
   assert.equal(upstreamOrigin('/v1/chat/completions', 'https://llm.example.com'), 'https://llm.example.com')
 })
+
+// The shape Claude Code sends every turn: the breakpoint moves from the last
+// tool result to the newest message, so the older block loses its marker.
+test('a moved breakpoint is withdrawn once the response shows the cache was read past it', () => {
+  const capture = new Capture()
+  const result = (marked: boolean) => ({
+    type: 'tool_result',
+    tool_use_id: 't1',
+    content: '2',
+    ...(marked ? { cache_control: { type: 'ephemeral' } } : {}),
+  })
+  const turn = (messages: unknown[]) => ({
+    model: 'claude-opus-5-5',
+    system: [{ type: 'text', text: rules, cache_control: { type: 'ephemeral' } }],
+    messages,
+  })
+  const opening = [
+    { role: 'user', content: 'How many files?' },
+    { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'ls', input: {} }] },
+  ]
+  capture.observe(turn([...opening, { role: 'user', content: [result(true)] }]))
+  const next = capture.observe(
+    turn([
+      ...opening,
+      { role: 'user', content: [result(false)] },
+      { role: 'assistant', content: 'Two files.' },
+      { role: 'user', content: [{ type: 'text', text: 'Which is first?', cache_control: { type: 'ephemeral' } }] },
+    ]),
+  )
+  assert.ok(capture.findings.some((f) => f.id === 'prefix-invalidated'), 'the byte diff alone flags it')
+
+  capture.observeUsage({ promptTokens: 2300, cachedTokens: 2280, writtenTokens: 20 }, 'anthropic', next)
+  assert.deepEqual(capture.findings, [])
+  assert.equal(next.divergence, null)
+  assert.deepEqual(next.findings, [])
+})

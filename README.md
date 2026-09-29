@@ -139,9 +139,9 @@ truth instead of diffing.
   figure: neither loses tokens that were cached.
 - Both proxy paths have been validated against live traffic: OpenAI, and
   Anthropic on `claude-sonnet-5` with explicit and automatic caching, where
-  Thermal's token counts matched the API's usage on every request. Long
-  multi-turn agent loops, where the breakpoint moves each turn, have not been
-  run live.
+  Thermal's token counts matched the API's usage on every request. A short
+  Claude Code session through the proxy, which moves its breakpoint each turn,
+  produced no false breaks. Long agent sessions have not been run live.
 
 ## Development
 

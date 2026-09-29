@@ -346,10 +346,18 @@ automatic caching, then system changed    read 3351, then rewrote 3350      -> p
 3,098-token prompt, no cache_control      full input price twice            -> cacheable-prefix-uncached, $0.0040
 ```
 
-Not yet run live: a long multi-turn agent loop, where the breakpoint moves to
-the newest message each turn. There Thermal only knows the current request's
-breakpoints, so a break's description can understate how much was reused; its
-price still comes from the API's written count.
+**Claude Code through the proxy showed where a byte diff and the provider
+disagree.** Claude Code moves its breakpoint to the newest message each turn,
+which removes `cache_control` from an older block, and sometimes sends the same
+content as a string on one turn and a one-block array on the next. Both change
+the JSON bytes; neither changes the prompt the provider renders, which read
+36,211 of 36,330 tokens from cache. Thermal reported both as breaks. A break is
+now withdrawn when the response shows the cache was read past the changed byte.
+A real break always reads less than that, so none are lost.
+
+Not yet run live: a long agent session. Thermal only knows the current
+request's breakpoints, so a break's description can understate how much was
+reused; its price still comes from the API's written count.
 
 Design notes worth keeping:
 
@@ -390,8 +398,8 @@ built for public screenshots.
 
 ### Next, in order
 
-1. **Run a long multi-turn agent loop live** through the proxy, and track
-   breakpoints written by earlier requests so reuse is described correctly.
+1. **Run a long agent session live** through the proxy, and track breakpoints
+   written by earlier requests so reuse is described correctly.
 2. **More detectors**, starting with `model-switched`, which Anthropic's
    `cache_miss_reason` provides almost for free.
 3. Codex and Cursor adapters, once their on-disk formats are inspected.
