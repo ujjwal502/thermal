@@ -14,14 +14,18 @@ function servedRate(exchange: Exchange): number | null {
 /** Everything the proxy can see before any traffic arrives: how to send some. */
 function waiting(live: Live): Node[] {
   const origin = location.origin
-  const openai = new URL(live.upstream).hostname.endsWith('openai.com')
+  const anthropic = `export ANTHROPIC_BASE_URL=${origin}`
+  const openai = `export OPENAI_BASE_URL=${origin}/v1`
+  const target = live.upstream ?? 'Anthropic or OpenAI, chosen by each request\'s API path'
+  const lines =
+    live.upstream === null ? [anthropic, openai] : [new URL(live.upstream).hostname.endsWith('openai.com') ? openai : anthropic]
   return [
     h(
       'section',
       { class: 'empty' },
       h('h1', { class: 'heading' }, 'No requests yet'),
-      h('p', {}, `Thermal is forwarding to ${live.upstream}. Point your agent at this proxy and run it as usual; requests appear here as they pass through.`),
-      h('pre', {}, openai ? `export OPENAI_BASE_URL=${origin}/v1` : `export ANTHROPIC_BASE_URL=${origin}`),
+      h('p', {}, `Thermal is forwarding to ${target}. Point your agent at this proxy and run it as usual; requests appear here as they pass through.`),
+      h('pre', {}, lines.join('\n')),
     ),
   ]
 }

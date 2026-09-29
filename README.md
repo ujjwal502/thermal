@@ -31,19 +31,14 @@ each response has been delivered, Thermal compares the request with the previous
 one in the same conversation and reports the first byte that changed inside the
 cached prefix.
 
-Anthropic:
-
 ```
 npx thermal-cache proxy
-export ANTHROPIC_BASE_URL=http://127.0.0.1:7878
+export ANTHROPIC_BASE_URL=http://127.0.0.1:7878     # Anthropic
+export OPENAI_BASE_URL=http://127.0.0.1:7878/v1     # OpenAI (Chat Completions and Responses API)
 ```
 
-OpenAI (Chat Completions and Responses API):
-
-```
-npx thermal-cache proxy --upstream https://api.openai.com
-export OPENAI_BASE_URL=http://127.0.0.1:7878/v1
-```
+One proxy serves both. Each request goes to Anthropic or OpenAI according to
+its API path; `--upstream <url>` sends every request to one host instead.
 
 The official SDKs for both providers read these variables, so most agents need
 no code change. Run the agent as usual; findings print as they happen, and
@@ -102,7 +97,8 @@ Options:
 --since <days>     only requests from the last N days
 --project <name>   only projects whose name contains this
 --port <n>         dashboard port (default: 7870) or proxy port (default: 7878)
---upstream <url>   proxy target (default: https://api.anthropic.com)
+--upstream <url>   send every proxied request here (default: Anthropic or
+                   OpenAI, chosen by each request's API path)
 ```
 
 ## Detectors

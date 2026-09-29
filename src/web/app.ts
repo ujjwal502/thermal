@@ -198,7 +198,7 @@ async function poll(): Promise<void> {
     if (text !== liveText) {
       liveText = text
       live = JSON.parse(text) as Live
-      context.textContent = `proxy, forwarding to ${live.upstream}`
+      context.textContent = `proxy, forwarding to ${live.upstream ?? 'Anthropic or OpenAI by request path'}`
       renderLive()
     }
   } catch (error) {

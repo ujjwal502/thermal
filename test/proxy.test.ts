@@ -3,7 +3,7 @@ import { createServer, get, type Server } from 'node:http'
 import { after, before, mock, test } from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
 import { Capture } from '../src/proxy/capture.ts'
-import { startProxy } from '../src/proxy/server.ts'
+import { startProxy, upstreamOrigin } from '../src/proxy/server.ts'
 
 let upstream: Server
 let upstreamUrl = ''
@@ -425,4 +425,15 @@ test('a changed system prompt under automatic caching is reported as a break', (
   const finding = capture.findings.find((f) => f.id === 'prefix-invalidated')
   assert.ok(finding, 'expected the break to be reported')
   assert.match(finding.title, /system/)
+})
+
+test('with no upstream set, each request goes to the provider its path belongs to', () => {
+  assert.equal(upstreamOrigin('/v1/chat/completions', undefined), 'https://api.openai.com')
+  assert.equal(upstreamOrigin('/v1/responses', undefined), 'https://api.openai.com')
+  assert.equal(upstreamOrigin('/v1/messages', undefined), 'https://api.anthropic.com')
+  assert.equal(upstreamOrigin('/v1/models', undefined), 'https://api.anthropic.com')
+})
+
+test('a configured upstream takes every request, whatever its path', () => {
+  assert.equal(upstreamOrigin('/v1/chat/completions', 'https://llm.example.com'), 'https://llm.example.com')
 })

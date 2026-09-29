@@ -379,7 +379,7 @@ export class Capture {
     return recorded
   }
 
-  snapshot(upstream: string): Live {
+  snapshot(upstream: string | null): Live {
     return {
       mode: 'proxy',
       upstream,

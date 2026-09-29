@@ -6,7 +6,8 @@ import { fromLoopback, sendJSON, serveStatic } from '../dashboard/static.ts'
 
 export interface ProxyOptions {
   port: number
-  upstream: string
+  /** Where every request goes. Undefined routes each one by its API path. */
+  upstream: string | undefined
   capture: Capture
   onListen(url: string): void
   onError(message: string): void
@@ -44,6 +45,19 @@ function providerFor(pathname: string): Provider | undefined {
   return undefined
 }
 
+const PROVIDER_ORIGIN: Record<Provider, string> = {
+  anthropic: 'https://api.anthropic.com',
+  openai: 'https://api.openai.com',
+}
+
+/** The same proxy serves Anthropic and OpenAI clients without a flag. A fixed
+ *  default sent OpenAI requests to Anthropic, whose "Invalid Anthropic API Key"
+ *  reads as Thermal being broken. Paths neither provider claims go to Anthropic. */
+export function upstreamOrigin(pathname: string, configured: string | undefined): string {
+  if (configured) return new URL(configured).origin
+  return PROVIDER_ORIGIN[providerFor(pathname) ?? 'anthropic']
+}
+
 function parseBody(raw: Buffer): RequestBody | undefined {
   if (raw.length === 0) return undefined
   try {
@@ -69,7 +83,7 @@ async function serveLive(request: IncomingMessage, response: ServerResponse, opt
   }
   const name = path.slice(LIVE.length + 1)
   if (name === 'api/mode') return sendJSON(response, 200, { mode: 'proxy' })
-  if (name === 'api/live') return sendJSON(response, 200, options.capture.snapshot(options.upstream))
+  if (name === 'api/live') return sendJSON(response, 200, options.capture.snapshot(options.upstream ?? null))
   await serveStatic(name, response)
 }
 
@@ -84,7 +98,7 @@ async function handle(
   const raw = await readBody(request)
   // Resolving the path against the upstream would let //other.host/... replace
   // the host, sending the caller's API key somewhere they never configured.
-  const target = new URL(`${new URL(options.upstream).origin}${request.url ?? '/'}`)
+  const target = new URL(`${upstreamOrigin(pathname, options.upstream)}${request.url ?? '/'}`)
 
   const upstream = await fetch(target, {
     method: request.method,

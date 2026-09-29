@@ -1,22 +1,26 @@
 import type { LiveFinding } from '../proxy/capture.ts'
 import { bold, critical, estimate, muted, secondary } from './format.ts'
 
-export function printListening(url: string, upstream: string): void {
+export function printListening(url: string, upstream: string | undefined): void {
   // The OpenAI SDK's base URL includes the /v1 segment; Anthropic's does not.
-  const exportLine = new URL(upstream).hostname.endsWith('openai.com')
-    ? `OPENAI_BASE_URL=${url}/v1`
-    : `ANTHROPIC_BASE_URL=${url}`
+  const anthropic = `ANTHROPIC_BASE_URL=${url}`
+  const openai = `OPENAI_BASE_URL=${url}/v1`
+  const exportLines =
+    upstream === undefined
+      ? [anthropic, openai]
+      : [new URL(upstream).hostname.endsWith('openai.com') ? openai : anthropic]
+  const target = upstream ?? 'api.anthropic.com or api.openai.com, by request path'
   console.log(`
   ${bold('thermal proxy')} ${muted('listening on')} ${bold(url)}
-  ${muted('forwarding to')} ${secondary(upstream)}
+  ${muted('forwarding to')} ${secondary(target)}
 
   ${muted('live view')}     ${bold(`${url}/_thermal/`)}
 
   ${secondary('Point your agent at it and keep working:')}
-    ${muted('export')} ${exportLine}
+${exportLines.map((line) => `    ${muted('export')} ${line}`).join('\n')}
 
   ${muted('Requests pass through untouched. Analysis runs after each response.')}
-  ${muted('Nothing is written to disk and nothing leaves this machine.')}
+  ${muted('Nothing is written to disk, and requests go only to the provider.')}
   ${muted('Ctrl-C to stop and see the summary.')}
 `)
 }

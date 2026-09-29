@@ -26,7 +26,8 @@ const HELP = `
     --report           print the terminal report only, no dashboard
     --root <path>      session directory (default: ~/.claude/projects)
     --port <n>         dashboard port (default: 7870) or proxy port (default: 7878)
-    --upstream <url>   proxy target (default: https://api.anthropic.com)
+    --upstream <url>   send every proxied request here (default: Anthropic or
+                       OpenAI, chosen by each request's API path)
     --since <days>     only sessions with activity in the last N days
     --project <name>   limit to one project
     --redact           replace project names and paths, for screenshots you can share
@@ -106,8 +107,8 @@ function runProxy(portText: string | undefined, upstreamText: string | undefined
   const port = parsePort(portText, DEFAULT_PORT)
   if (port === undefined) return Promise.resolve(1)
 
-  const upstream = upstreamText ?? 'https://api.anthropic.com'
-  if (!URL.canParse(upstream)) {
+  const upstream = upstreamText
+  if (upstream !== undefined && !URL.canParse(upstream)) {
     printError(`--upstream expects a full URL such as https://api.openai.com, got "${upstream}".`)
     return Promise.resolve(1)
   }

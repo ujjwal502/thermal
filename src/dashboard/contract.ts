@@ -127,7 +127,8 @@ export interface LiveFindingRow {
 
 export interface Live {
   mode: 'proxy'
-  upstream: string
+  /** Null when each request is routed to its provider by path. */
+  upstream: string | null
   requests: number
   usage: { withUsage: number; promptTokens: number; cachedTokens: number }
   exchanges: Exchange[]
