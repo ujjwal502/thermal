@@ -233,6 +233,19 @@ main.loading {
   border-left: 1px solid var(--rule);
 }
 
+/* Below this the findings table cannot fit beside the request, and spills
+   over it. */
+@media (max-width: 900px) {
+  .split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .split > .region + .region {
+    border-left: 0;
+    border-top: 1px solid var(--rule);
+  }
+}
+
 .heading {
   margin: 0;
   font-size: 18px;
